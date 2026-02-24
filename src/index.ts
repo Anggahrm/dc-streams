@@ -34,6 +34,7 @@ let loopEnabled = false;
 let latestMessageContext: Message | undefined;
 let playbackSerial = 0;
 let pendingRestart: PendingRestart | undefined;
+const metadataCache = new Map<string, VideoMetadata>();
 
 streamer.client.on("ready", () => {
     console.log(`--- ${streamer.client.user?.tag} is ready ---`);
@@ -122,9 +123,18 @@ streamer.client.on("messageCreate", async (msg) => {
 
         const stepSeconds = parseSeekStep(msg.content, defaultSeekStepSeconds);
         const currentOffsetSeconds = getCurrentOffsetSeconds(activePlayback);
-        const targetOffsetSeconds = msg.content.startsWith(".back")
+        let targetOffsetSeconds = msg.content.startsWith(".back")
             ? Math.max(0, currentOffsetSeconds - stepSeconds)
             : currentOffsetSeconds + stepSeconds;
+
+        const metadata = metadataCache.get(activePlayback.url);
+        if (metadata?.durationSeconds && Number.isFinite(metadata.durationSeconds)) {
+            const maxSeek = Math.max(0, metadata.durationSeconds - 2);
+            if (targetOffsetSeconds > maxSeek) {
+                targetOffsetSeconds = maxSeek;
+                await safeReply(msg, `Target seek melewati durasi. Di-clamp ke ${Math.floor(targetOffsetSeconds)} detik.`);
+            }
+        }
 
         console.log(`Seek request: current=${Math.floor(currentOffsetSeconds)} step=${stepSeconds} target=${Math.floor(targetOffsetSeconds)}`);
         await safeReply(msg, `Seek ke ${Math.floor(targetOffsetSeconds)} detik (${msg.content.startsWith(".back") ? "back" : "forw"} ${stepSeconds}s), stream akan restart...`);
@@ -161,7 +171,8 @@ streamer.client.on("messageCreate", async (msg) => {
 
         const metadata = await probeVideoMetadata(args.url);
         if (metadata) {
-            await safeReply(msg, metadata);
+            metadataCache.set(args.url, metadata);
+            await safeReply(msg, formatMetadataReply(metadata));
         }
 
         const type: StreamType = msg.content.startsWith(".play-cam") ? "camera" : "go-live";
@@ -435,7 +446,16 @@ type ProbeResult = {
     }>;
 };
 
-async function probeVideoMetadata(url: string): Promise<string | undefined> {
+type VideoMetadata = {
+    durationSeconds?: number;
+    durationText: string;
+    resolution: string;
+    fps: string;
+    videoCodec: string;
+    audioCodec: string;
+};
+
+async function probeVideoMetadata(url: string): Promise<VideoMetadata | undefined> {
     const result = await runFfprobe(url).catch(() => undefined);
     if (!result) return undefined;
 
@@ -449,7 +469,18 @@ async function probeVideoMetadata(url: string): Promise<string | undefined> {
     const videoCodec = video?.codec_name ?? "unknown";
     const audioCodec = audio?.codec_name ?? "unknown";
 
-    return `Metadata: durasi=${durationText}, resolusi=${resolution}, fps=${fps}, vcodec=${videoCodec}, acodec=${audioCodec}`;
+    return {
+        durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : undefined,
+        durationText,
+        resolution,
+        fps,
+        videoCodec,
+        audioCodec
+    };
+}
+
+function formatMetadataReply(metadata: VideoMetadata): string {
+    return `Metadata: durasi=${metadata.durationText}, resolusi=${metadata.resolution}, fps=${metadata.fps}, vcodec=${metadata.videoCodec}, acodec=${metadata.audioCodec}`;
 }
 
 function runFfprobe(url: string): Promise<ProbeResult> {
