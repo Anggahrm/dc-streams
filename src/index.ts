@@ -1,6 +1,7 @@
 import { Client, StageChannel, type Message } from "discord.js-selfbot-v13";
 import { Streamer, Utils, prepareStream, playStream } from "@dank074/discord-video-stream";
 import config from "./config.json" with { type: "json" };
+import { spawn } from "node:child_process";
 
 const runtimeConfig = resolveRuntimeConfig();
 const streamer = new Streamer(new Client());
@@ -154,6 +155,11 @@ streamer.client.on("messageCreate", async (msg) => {
         if (!args) {
             await safeReply(msg, "Gunakan: .play-live <url> atau .play-cam <url>");
             return;
+        }
+
+        const metadata = await probeVideoMetadata(args.url);
+        if (metadata) {
+            await safeReply(msg, metadata);
         }
 
         const type: StreamType = msg.content.startsWith(".play-cam") ? "camera" : "go-live";
@@ -401,4 +407,103 @@ function parseBooleanEnv(name: string): boolean | undefined {
     if (value === "true" || value === "1") return true;
     if (value === "false" || value === "0") return false;
     return undefined;
+}
+
+type ProbeResult = {
+    format?: {
+        duration?: string;
+        bit_rate?: string;
+        format_name?: string;
+    };
+    streams?: Array<{
+        codec_type?: string;
+        codec_name?: string;
+        width?: number;
+        height?: number;
+        avg_frame_rate?: string;
+    }>;
+};
+
+async function probeVideoMetadata(url: string): Promise<string | undefined> {
+    const result = await runFfprobe(url).catch(() => undefined);
+    if (!result) return undefined;
+
+    const video = result.streams?.find((stream) => stream.codec_type === "video");
+    const audio = result.streams?.find((stream) => stream.codec_type === "audio");
+
+    const duration = Number(result.format?.duration ?? "0");
+    const durationText = Number.isFinite(duration) && duration > 0 ? formatDuration(duration) : "unknown";
+    const resolution = video?.width && video?.height ? `${video.width}x${video.height}` : "unknown";
+    const fps = parseFps(video?.avg_frame_rate);
+    const videoCodec = video?.codec_name ?? "unknown";
+    const audioCodec = audio?.codec_name ?? "unknown";
+
+    return `Metadata: durasi=${durationText}, resolusi=${resolution}, fps=${fps}, vcodec=${videoCodec}, acodec=${audioCodec}`;
+}
+
+function runFfprobe(url: string): Promise<ProbeResult> {
+    return new Promise((resolve, reject) => {
+        const child = spawn("ffprobe", [
+            "-v", "error",
+            "-print_format", "json",
+            "-show_format",
+            "-show_streams",
+            url
+        ]);
+
+        let stdout = "";
+        let stderr = "";
+
+        const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            reject(new Error("ffprobe timeout"));
+        }, 12000);
+
+        child.stdout.on("data", (data) => {
+            stdout += data.toString();
+        });
+
+        child.stderr.on("data", (data) => {
+            stderr += data.toString();
+        });
+
+        child.on("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+
+        child.on("close", (code) => {
+            clearTimeout(timer);
+            if (code !== 0) {
+                reject(new Error(stderr || `ffprobe exited with code ${code}`));
+                return;
+            }
+
+            try {
+                resolve(JSON.parse(stdout) as ProbeResult);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    });
+}
+
+function parseFps(value: string | undefined): string {
+    if (!value) return "unknown";
+    const [numText, denText] = value.split("/");
+    const num = Number(numText);
+    const den = Number(denText ?? "1");
+    if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) return "unknown";
+    const fps = num / den;
+    if (!Number.isFinite(fps) || fps <= 0) return "unknown";
+    return fps.toFixed(2).replace(/\.00$/, "");
+}
+
+function formatDuration(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
 }
