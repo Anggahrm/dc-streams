@@ -37,5 +37,6 @@ Use env vars to avoid storing secrets in `src/config.json`:
 - `Aptfile` installs system `ffmpeg`
 - Deploy can use bundled local package source to keep `customInputOptions` seek behavior.
 - YouTube links are resolved via `YTDL_API_BASE/download?url=<youtube-url>&type=video` before streaming.
+- If resolver requires PoW, bot auto-runs `/akumaudownload` and `/cekpunyaku` flow to obtain `pow_session`.
 - Required config var for apt runtime libs:
   - `LD_LIBRARY_PATH=/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/x86_64-linux-gnu/pulseaudio:/app/.apt/usr/lib/x86_64-linux-gnu/blas:/app/.apt/usr/lib/x86_64-linux-gnu/lapack:/app/.apt/lib/x86_64-linux-gnu:/app/.apt/usr/lib`

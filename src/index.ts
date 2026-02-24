@@ -2,6 +2,7 @@ import { Client, StageChannel, type Message } from "discord.js-selfbot-v13";
 import { Streamer, Utils, prepareStream, playStream } from "@dank074/discord-video-stream";
 import config from "./config.json" with { type: "json" };
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const runtimeConfig = resolveRuntimeConfig();
 const streamer = new Streamer(new Client());
@@ -585,37 +586,85 @@ async function resolveViaYoutubedlApi(sourceUrl: string): Promise<string> {
     const endpoint = new URL(`${youtubeResolverBase}/download`);
     endpoint.searchParams.set("url", sourceUrl);
     endpoint.searchParams.set("type", "video");
-    if (youtubeResolverApiKey) {
-        endpoint.searchParams.set("apikey", youtubeResolverApiKey);
+    if (youtubeResolverApiKey) endpoint.searchParams.set("apikey", youtubeResolverApiKey);
+
+    const headers: Record<string, string> = { "Accept": "application/json" };
+    const firstTry = await fetch(endpoint.toString(), { method: "GET", headers });
+
+    if (firstTry.ok) {
+        return extractResolvedFileUrl(await firstTry.json() as ResolverDownloadPayload);
     }
 
-    const response = await fetch(endpoint.toString(), {
-        method: "GET",
+    const powSession = await solveYtdlPowSession(sourceUrl);
+    headers.Cookie = `pow_session=${powSession}`;
+    const secondTry = await fetch(endpoint.toString(), { method: "GET", headers });
+    if (!secondTry.ok) {
+        throw new Error(`YouTube resolver failed after PoW (${secondTry.status})`);
+    }
+
+    return extractResolvedFileUrl(await secondTry.json() as ResolverDownloadPayload);
+}
+
+type ResolverDownloadPayload = {
+    fileUrl?: string;
+    url?: string;
+    data?: { fileUrl?: string; url?: string };
+};
+
+function extractResolvedFileUrl(payload: ResolverDownloadPayload): string {
+    const fileUrl = payload.fileUrl || payload.url || payload.data?.fileUrl || payload.data?.url;
+    if (!fileUrl) throw new Error("YouTube resolver returned empty file URL");
+    if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+    return new URL(fileUrl, `${youtubeResolverBase}/`).toString();
+}
+
+async function solveYtdlPowSession(sourceUrl: string): Promise<string> {
+    const challengeRes = await fetch(`${youtubeResolverBase}/akumaudownload`, {
+        method: "POST",
         headers: {
+            "Content-Type": "application/json",
             "Accept": "application/json"
-        }
+        },
+        body: JSON.stringify({ url: sourceUrl, type: "video" })
+    });
+    if (!challengeRes.ok) {
+        throw new Error(`YouTube resolver challenge failed (${challengeRes.status})`);
+    }
+
+    const challengePayload = await challengeRes.json() as { challenge: string; difficulty: number };
+    const nonce = solvePowNonce(challengePayload.challenge, challengePayload.difficulty);
+
+    const verifyRes = await fetch(`${youtubeResolverBase}/cekpunyaku`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        },
+        body: JSON.stringify({ url: sourceUrl, type: "video", nonce })
     });
 
-    if (!response.ok) {
-        throw new Error(`YouTube resolver failed (${response.status})`);
+    if (!verifyRes.ok) {
+        throw new Error(`YouTube resolver verify failed (${verifyRes.status})`);
     }
 
-    const payload = await response.json() as {
-        fileUrl?: string;
-        url?: string;
-        data?: { fileUrl?: string; url?: string };
-    };
-
-    const fileUrl = payload.fileUrl || payload.url || payload.data?.fileUrl || payload.data?.url;
-    if (!fileUrl) {
-        throw new Error("YouTube resolver returned empty file URL");
+    const setCookie = verifyRes.headers.get("set-cookie") || "";
+    const match = /pow_session=([^;]+)/.exec(setCookie);
+    if (!match) {
+        throw new Error("YouTube resolver did not return pow_session cookie");
     }
+    return match[1];
+}
 
-    if (/^https?:\/\//i.test(fileUrl)) {
-        return fileUrl;
+function solvePowNonce(challenge: string, difficulty: number): string {
+    const prefix = "0".repeat(Math.max(1, difficulty));
+    for (let i = 0; i < 20_000_000; i++) {
+        const nonce = String(i);
+        const hash = createHash("sha256").update(challenge).update(nonce).digest("hex");
+        if (hash.startsWith(prefix)) {
+            return nonce;
+        }
     }
-
-    return new URL(fileUrl, `${youtubeResolverBase}/`).toString();
+    throw new Error(`Failed to solve PoW difficulty ${difficulty}`);
 }
 
 function runFfprobe(url: string): Promise<ProbeResult> {
