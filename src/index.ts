@@ -286,16 +286,47 @@ async function tryStartNextQueued(msg: Message, forcedOffsetSeconds = 0): Promis
 }
 
 async function ensureVoiceJoined(msg: Message): Promise<boolean> {
+    const selfChannelId = streamer.client.user?.voice?.channelId;
     const channel = msg.author.voice?.channel;
+    if ((!channel || !msg.guildId) && selfChannelId) {
+        return true;
+    }
     if (!channel || !msg.guildId) return false;
 
+    if (selfChannelId === channel.id) {
+        return true;
+    }
+
     console.log(`Attempting to join voice channel ${msg.guildId}/${channel.id}`);
-    await streamer.joinVoice(msg.guildId, channel.id);
+    try {
+        await withTimeout(streamer.joinVoice(msg.guildId, channel.id), 8000);
+    } catch (error) {
+        const stillConnected = streamer.client.user?.voice?.channelId === channel.id;
+        if (!stillConnected) {
+            console.log("joinVoice failed", error);
+            return false;
+        }
+    }
 
     if (channel instanceof StageChannel) {
         await streamer.client.user?.voice?.setSuppressed(false);
     }
     return true;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`timeout ${timeoutMs}ms`)), timeoutMs);
+        promise
+            .then((value) => {
+                clearTimeout(timer);
+                resolve(value);
+            })
+            .catch((error) => {
+                clearTimeout(timer);
+                reject(error);
+            });
+    });
 }
 
 async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds = 0): Promise<void> {
