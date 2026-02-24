@@ -286,14 +286,14 @@ async function tryStartNextQueued(msg: Message, forcedOffsetSeconds = 0): Promis
 }
 
 async function ensureVoiceJoined(msg: Message): Promise<boolean> {
-    const selfChannelId = streamer.client.user?.voice?.channelId;
+    const connectionChannelId = streamer.voiceConnection?.channelId;
     const channel = msg.author.voice?.channel;
-    if ((!channel || !msg.guildId) && selfChannelId) {
+    if ((!channel || !msg.guildId) && connectionChannelId) {
         return true;
     }
     if (!channel || !msg.guildId) return false;
 
-    if (selfChannelId === channel.id) {
+    if (connectionChannelId === channel.id) {
         return true;
     }
 
@@ -311,7 +311,7 @@ async function ensureVoiceJoined(msg: Message): Promise<boolean> {
     if (channel instanceof StageChannel) {
         await streamer.client.user?.voice?.setSuppressed(false);
     }
-    return true;
+    return Boolean(streamer.voiceConnection);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -378,6 +378,19 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         console.log(`Playback ended naturally serial=${serial}`);
     } catch (error) {
         if (!playbackController.signal.aborted) {
+            if (error instanceof Error && error.message.includes("Bot is not connected to a voice channel")) {
+                console.log("playStream detected disconnected voice state, retrying join once...");
+                const rejoined = await ensureVoiceJoined(msg);
+                if (rejoined) {
+                    try {
+                        await playStream(output, streamer, { type: item.type }, playbackController.signal);
+                        console.log(`Playback recovered after rejoin serial=${serial}`);
+                        return;
+                    } catch (retryError) {
+                        console.log("playStream retry failed", retryError);
+                    }
+                }
+            }
             console.log("playStream error", error);
             if (activePlayback && activePlayback.controller === playbackController) {
                 activePlayback.stopReason = "error";
