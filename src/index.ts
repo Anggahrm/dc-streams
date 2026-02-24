@@ -10,7 +10,7 @@ const youtubeResolverBase = (process.env.YTDL_API_BASE?.trim() || "https://youtu
 const youtubeResolverApiKey = process.env.YTDL_API_KEY?.trim();
 const youtubeResolverMediaType = (process.env.YTDL_MEDIA_TYPE?.trim() || "merge").toLowerCase();
 const ytdlPollIntervalMs = Number(process.env.YTDL_POLL_INTERVAL_MS || "2000");
-const ytdlPollTimeoutMs = Number(process.env.YTDL_POLL_TIMEOUT_MS || "60000");
+const ytdlPollTimeoutMs = Number(process.env.YTDL_POLL_TIMEOUT_MS || "180000");
 
 const profilePresets = {
     low: { width: 854, height: 480, fps: 24, bitrateKbps: 800, maxBitrateKbps: 1400 },
@@ -52,6 +52,8 @@ streamer.client.on("messageCreate", async (msg) => {
     if (msg.author.bot) return;
     if (!runtimeConfig.acceptedAuthors.includes(msg.author.id)) return;
     if (!msg.content) return;
+
+    try {
 
     latestMessageContext = msg;
 
@@ -219,6 +221,10 @@ streamer.client.on("messageCreate", async (msg) => {
         }
         return;
     }
+    } catch (error) {
+        console.log("messageCreate handler error", error);
+        await safeReply(msg, "Command gagal diproses (resolver timeout/error). Bot tetap online, coba lagi.");
+    }
 });
 
 streamer.client.login(runtimeConfig.token);
@@ -374,8 +380,22 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         prepareOptions.customInputOptions = ["-ss", `${seekSeconds}`];
     }
 
-    const resolvedStreamUrl = await resolvePlayableUrl(item.sourceUrl);
-    const { command, output } = prepareStream(resolvedStreamUrl, prepareOptions as never, playbackController.signal);
+    let command: ReturnType<typeof prepareStream>["command"];
+    let output: ReturnType<typeof prepareStream>["output"];
+    let resolvedStreamUrl = item.sourceUrl;
+    try {
+        resolvedStreamUrl = await resolvePlayableUrl(item.sourceUrl);
+        const prepared = prepareStream(resolvedStreamUrl, prepareOptions as never, playbackController.signal);
+        command = prepared.command;
+        output = prepared.output;
+    } catch (error) {
+        console.log("resolve/prepare playback failed", error);
+        await safeReply(msg, "Gagal resolve source (timeout/down). Request dibatalkan, bot tetap online.");
+        if (queue.length > 0) {
+            await tryStartNextQueued(msg);
+        }
+        return;
+    }
     command.on("start", (cmdline: string) => {
         console.log(`FFmpeg start (seek=${seekSeconds}s, type=${item.type}): ${cmdline}`);
     });
