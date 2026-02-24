@@ -1,0 +1,31 @@
+import { Writable } from "node:stream";
+import type { Packet } from "node-av";
+export declare class BaseMediaStream extends Writable {
+    private _pts?;
+    private _syncTolerance;
+    private _loggerSend;
+    private _loggerSync;
+    private _loggerSleep;
+    private _noSleep;
+    private _startTime?;
+    private _startPts?;
+    private _sync;
+    private _syncStream?;
+    constructor(type: string, noSleep?: boolean);
+    get sync(): boolean;
+    set sync(val: boolean);
+    get syncStream(): BaseMediaStream | undefined;
+    set syncStream(stream: BaseMediaStream | undefined);
+    get noSleep(): boolean;
+    set noSleep(val: boolean);
+    get pts(): number | undefined;
+    get syncTolerance(): number;
+    set syncTolerance(n: number);
+    protected _sendFrame(_frame: Buffer, _frametime: number): Promise<void>;
+    private ptsDelta;
+    private isAhead;
+    private isBehind;
+    private resetTimingCompensation;
+    _write(frame: Packet, _: BufferEncoding, callback: (error?: Error | null) => void): Promise<void>;
+    _destroy(error: Error | null, callback: (error?: Error | null) => void): void;
+}

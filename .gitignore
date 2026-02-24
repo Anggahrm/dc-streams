@@ -1,3 +1,5 @@
 node_modules/
 dist/
 basic.log
+!vendor/discord-video-stream/dist/
+!vendor/discord-video-stream/dist/**
