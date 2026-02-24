@@ -15,7 +15,7 @@ const profilePresets = {
 type ProfileName = keyof typeof profilePresets;
 type StreamType = "go-live" | "camera";
 type QueueItem = { url: string; type: StreamType };
-type PendingRestart = { item: QueueItem; offsetSeconds: number; msg: Message };
+type PendingRestart = { item: QueueItem; offsetSeconds: number; msg: Message; retries: number; cause: "seek" | "tune" | "skip" | "disconnect-recover" };
 type ActivePlayback = {
     url: string;
     type: StreamType;
@@ -127,7 +127,7 @@ streamer.client.on("messageCreate", async (msg) => {
             ? Math.max(0, currentOffsetSeconds - stepSeconds)
             : currentOffsetSeconds + stepSeconds;
 
-        const metadata = metadataCache.get(activePlayback.url);
+        const metadata = await getOrProbeMetadata(activePlayback.url);
         if (metadata?.durationSeconds && Number.isFinite(metadata.durationSeconds)) {
             const maxSeek = Math.max(0, metadata.durationSeconds - 2);
             if (targetOffsetSeconds > maxSeek) {
@@ -169,9 +169,8 @@ streamer.client.on("messageCreate", async (msg) => {
             return;
         }
 
-        const metadata = await probeVideoMetadata(args.url);
+        const metadata = await getOrProbeMetadata(args.url);
         if (metadata) {
-            metadataCache.set(args.url, metadata);
             await safeReply(msg, formatMetadataReply(metadata));
         }
 
@@ -269,7 +268,13 @@ function getCurrentOffsetSeconds(playback: ActivePlayback): number {
 
 async function restartCurrentPlayback(msg: Message, item: QueueItem, offsetSeconds: number, reason: ActivePlayback["stopReason"]): Promise<void> {
     if (activePlayback) {
-        pendingRestart = { item, offsetSeconds, msg };
+        pendingRestart = {
+            item,
+            offsetSeconds,
+            msg,
+            retries: 0,
+            cause: reason === "tune" ? "tune" : reason === "skip" ? "skip" : "seek"
+        };
         activePlayback.stopReason = reason;
         activePlayback.controller.abort();
         return;
@@ -337,7 +342,15 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
     }
 
     const playbackController = new AbortController();
-    const seekSeconds = Math.max(0, Math.floor(startOffsetSeconds));
+    let seekSeconds = Math.max(0, Math.floor(startOffsetSeconds));
+    const metadata = await getOrProbeMetadata(item.url);
+    if (metadata?.durationSeconds && Number.isFinite(metadata.durationSeconds)) {
+        const maxSeek = Math.max(0, Math.floor(metadata.durationSeconds - 2));
+        if (seekSeconds > maxSeek) {
+            console.log(`Clamp seek in startPlayback: requested=${seekSeconds} max=${maxSeek}`);
+            seekSeconds = maxSeek;
+        }
+    }
 
     const prepareOptions: Record<string, unknown> = {
         width: activeStreamOpts.width,
@@ -351,7 +364,6 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
 
     if (seekSeconds > 0) {
         prepareOptions.customInputOptions = ["-ss", `${seekSeconds}`];
-        prepareOptions.customFfmpegFlags = ["-ss", `${seekSeconds}`];
     }
 
     const { command, output } = prepareStream(item.url, prepareOptions as never, playbackController.signal);
@@ -379,17 +391,18 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
     } catch (error) {
         if (!playbackController.signal.aborted) {
             if (error instanceof Error && error.message.includes("Bot is not connected to a voice channel")) {
-                console.log("playStream detected disconnected voice state, retrying join once...");
-                const rejoined = await ensureVoiceJoined(msg);
-                if (rejoined) {
-                    try {
-                        await playStream(output, streamer, { type: item.type }, playbackController.signal);
-                        console.log(`Playback recovered after rejoin serial=${serial}`);
-                        return;
-                    } catch (retryError) {
-                        console.log("playStream retry failed", retryError);
-                    }
+                console.log("playStream detected disconnected voice state, scheduling full restart...");
+                pendingRestart = {
+                    item,
+                    offsetSeconds: seekSeconds,
+                    msg,
+                    retries: 1,
+                    cause: "disconnect-recover"
+                };
+                if (activePlayback && activePlayback.controller === playbackController) {
+                    activePlayback.stopReason = "switch";
                 }
+                return;
             }
             console.log("playStream error", error);
             if (activePlayback && activePlayback.controller === playbackController) {
@@ -412,6 +425,10 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         if (pendingRestart) {
             const restart = pendingRestart;
             pendingRestart = undefined;
+            if (restart.cause === "disconnect-recover" && restart.retries > 1) {
+                await safeReply(restart.msg, "Gagal recover voice connection saat restart stream.");
+                return;
+            }
             await startPlayback(restart.msg, restart.item, restart.offsetSeconds);
             return;
         }
@@ -525,6 +542,16 @@ async function probeVideoMetadata(url: string): Promise<VideoMetadata | undefine
 
 function formatMetadataReply(metadata: VideoMetadata): string {
     return `Metadata: durasi=${metadata.durationText}, resolusi=${metadata.resolution}, fps=${metadata.fps}, vcodec=${metadata.videoCodec}, acodec=${metadata.audioCodec}`;
+}
+
+async function getOrProbeMetadata(url: string): Promise<VideoMetadata | undefined> {
+    const cached = metadataCache.get(url);
+    if (cached) return cached;
+    const metadata = await probeVideoMetadata(url);
+    if (metadata) {
+        metadataCache.set(url, metadata);
+    }
+    return metadata;
 }
 
 function runFfprobe(url: string): Promise<ProbeResult> {
