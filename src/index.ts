@@ -48,6 +48,21 @@ streamer.client.on("messageCreate", async (msg) => {
 
     if (!msg.content) return;
 
+    if (msg.content.startsWith(".help")) {
+        await safeReply(msg, [
+            "Perintah:",
+            ".play-live <url>",
+            ".play-cam <url>",
+            ".stop-stream",
+            ".disconnect",
+            ".tune show|low|medium|high",
+            ".back [detik] (default 10)",
+            ".forw [detik] (default 10)",
+            ".help"
+        ].join("\n"));
+        return;
+    }
+
     if (msg.content.startsWith(".tune")) {
         const args = msg.content.trim().split(/\s+/);
         const selectedProfile = args[1]?.toLowerCase();
@@ -64,6 +79,14 @@ streamer.client.on("messageCreate", async (msg) => {
 
         activeProfile = selectedProfile;
         activeStreamOpts = buildStreamOpts(activeProfile);
+
+        if (activePlayback) {
+            const offsetSeconds = getCurrentOffsetSeconds(activePlayback);
+            await safeReply(msg, `Tuning diubah ke ${formatProfile(activeProfile, activeStreamOpts)}. Auto-apply ke stream aktif (restart dari ${Math.floor(offsetSeconds)}s)...`);
+            await startPlayback(msg, activePlayback.url, activePlayback.type, offsetSeconds);
+            return;
+        }
+
         await safeReply(msg, `Tuning diubah ke ${formatProfile(activeProfile, activeStreamOpts)}`);
         return;
     }
@@ -176,7 +199,7 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
     controller = new AbortController();
     const playbackController = controller;
 
-    const customInputOptions = startOffsetSeconds > 0
+    const customFfmpegFlags = startOffsetSeconds > 0
         ? ["-ss", `${Math.floor(startOffsetSeconds)}`]
         : undefined;
 
@@ -189,8 +212,8 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
         hardwareAcceleratedDecoding: activeStreamOpts.hardware_acceleration,
         videoCodec: Utils.normalizeVideoCodec(activeStreamOpts.videoCodec)
     };
-    if (customInputOptions) {
-        prepareOptions.customInputOptions = customInputOptions;
+    if (customFfmpegFlags) {
+        prepareOptions.customFfmpegFlags = customFfmpegFlags;
     }
 
     const { command, output } = prepareStream(url, prepareOptions as never, playbackController.signal);
