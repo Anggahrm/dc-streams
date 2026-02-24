@@ -6,8 +6,12 @@ This example shows how to stream a video, both using the existing voice connecti
 
 - `.play-live <url>`: start Go Live stream from URL.
 - `.play-cam <url>`: start camera stream from URL.
-- `.stop-stream`: stop current stream.
-- `.disconnect`: leave voice channel.
+- If stream is active, `.play-live`/`.play-cam` adds item to queue.
+- `.skip`: stop current stream and continue next queue item.
+- `.stop-stream`: stop stream and clear queue, stay in voice channel.
+- `.disconnect`: leave voice channel and clear queue.
+- `.queue`: show active stream and queued items.
+- `.loop on|off|toggle|show`: loop last finished stream.
 - `.tune show`: show active tuning profile.
 - `.tune low|medium|high`: switch runtime tuning profile. If stream is active, profile auto-applies by restarting from current offset (not from start).
 - `.back [seconds]`: restart active stream from current position minus seconds (default 10).
