@@ -24,6 +24,8 @@ Use env vars to avoid storing secrets in `src/config.json`:
 
 - `DISCORD_TOKEN`: Discord self token.
 - `ACCEPTED_AUTHORS`: comma-separated user IDs, example `123,456`.
+- `YTDL_API_BASE`: YouTube resolver API base (default `https://youtubedl.siputzx.my.id`).
+- `YTDL_API_KEY`: optional API key for resolver.
 - `STREAM_WIDTH`, `STREAM_HEIGHT`, `STREAM_FPS`
 - `STREAM_BITRATE_KBPS`, `STREAM_MAX_BITRATE_KBPS`
 - `STREAM_HW_ACCEL`: `true|false`
@@ -34,5 +36,6 @@ Use env vars to avoid storing secrets in `src/config.json`:
 - `Procfile` uses worker process: `worker: npm run start`
 - `Aptfile` installs system `ffmpeg`
 - Deploy can use bundled local package source to keep `customInputOptions` seek behavior.
+- YouTube links are resolved via `YTDL_API_BASE/download?url=<youtube-url>&type=video` before streaming.
 - Required config var for apt runtime libs:
   - `LD_LIBRARY_PATH=/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/x86_64-linux-gnu/pulseaudio:/app/.apt/usr/lib/x86_64-linux-gnu/blas:/app/.apt/usr/lib/x86_64-linux-gnu/lapack:/app/.apt/lib/x86_64-linux-gnu:/app/.apt/usr/lib`

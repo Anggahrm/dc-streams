@@ -5,6 +5,8 @@ import { spawn } from "node:child_process";
 
 const runtimeConfig = resolveRuntimeConfig();
 const streamer = new Streamer(new Client());
+const youtubeResolverBase = (process.env.YTDL_API_BASE?.trim() || "https://youtubedl.siputzx.my.id").replace(/\/$/, "");
+const youtubeResolverApiKey = process.env.YTDL_API_KEY?.trim();
 
 const profilePresets = {
     low: { width: 854, height: 480, fps: 24, bitrateKbps: 800, maxBitrateKbps: 1400 },
@@ -14,10 +16,11 @@ const profilePresets = {
 
 type ProfileName = keyof typeof profilePresets;
 type StreamType = "go-live" | "camera";
-type QueueItem = { url: string; type: StreamType };
+type QueueItem = { sourceUrl: string; type: StreamType };
 type PendingRestart = { item: QueueItem; offsetSeconds: number; msg: Message; retries: number; cause: "seek" | "tune" | "skip" | "disconnect-recover" };
 type ActivePlayback = {
-    url: string;
+    sourceUrl: string;
+    resolvedUrl: string;
     type: StreamType;
     baseOffsetSeconds: number;
     startedAtMs: number;
@@ -35,6 +38,7 @@ let latestMessageContext: Message | undefined;
 let playbackSerial = 0;
 let pendingRestart: PendingRestart | undefined;
 const metadataCache = new Map<string, VideoMetadata>();
+const resolvedUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 streamer.client.on("ready", () => {
     console.log(`--- ${streamer.client.user?.tag} is ready ---`);
@@ -50,7 +54,7 @@ streamer.client.on("messageCreate", async (msg) => {
     if (msg.content.startsWith(".help")) {
         await safeReply(msg, [
             "Perintah:",
-            ".play-live <url> (play / enqueue)",
+            ".play-live <url/youtube> (play / enqueue)",
             ".play-cam <url> (play / enqueue)",
             ".skip (lanjut queue berikutnya)",
             ".stop-stream (stop stream, tetap di voice)",
@@ -105,7 +109,7 @@ streamer.client.on("messageCreate", async (msg) => {
 
         if (activePlayback) {
             const offsetSeconds = getCurrentOffsetSeconds(activePlayback);
-            const current = { url: activePlayback.url, type: activePlayback.type };
+            const current = { sourceUrl: activePlayback.sourceUrl, type: activePlayback.type };
             await safeReply(msg, `Tuning diubah ke ${formatProfile(activeProfile, activeStreamOpts)}. Auto-apply dari ${Math.floor(offsetSeconds)}s...`);
             await restartCurrentPlayback(msg, current, offsetSeconds, "tune");
             return;
@@ -127,7 +131,7 @@ streamer.client.on("messageCreate", async (msg) => {
             ? Math.max(0, currentOffsetSeconds - stepSeconds)
             : currentOffsetSeconds + stepSeconds;
 
-        const metadata = await getOrProbeMetadata(activePlayback.url);
+        const metadata = await getOrProbeMetadata(activePlayback.sourceUrl);
         if (metadata?.durationSeconds && Number.isFinite(metadata.durationSeconds)) {
             const maxSeek = Math.max(0, metadata.durationSeconds - 2);
             if (targetOffsetSeconds > maxSeek) {
@@ -139,7 +143,7 @@ streamer.client.on("messageCreate", async (msg) => {
         console.log(`Seek request: current=${Math.floor(currentOffsetSeconds)} step=${stepSeconds} target=${Math.floor(targetOffsetSeconds)}`);
         await safeReply(msg, `Seek ke ${Math.floor(targetOffsetSeconds)} detik (${msg.content.startsWith(".back") ? "back" : "forw"} ${stepSeconds}s), stream akan restart...`);
 
-        const current = { url: activePlayback.url, type: activePlayback.type };
+        const current = { sourceUrl: activePlayback.sourceUrl, type: activePlayback.type };
         await restartCurrentPlayback(msg, current, targetOffsetSeconds, "seek");
         return;
     }
@@ -175,7 +179,7 @@ streamer.client.on("messageCreate", async (msg) => {
         }
 
         const type: StreamType = msg.content.startsWith(".play-cam") ? "camera" : "go-live";
-        const item: QueueItem = { url: args.url, type };
+        const item: QueueItem = { sourceUrl: args.url, type };
 
         if (activePlayback) {
             queue.push(item);
@@ -236,11 +240,11 @@ function formatProfile(profileName: ProfileName, streamOpts: typeof config.strea
 function formatQueueStatus(): string {
     const lines = [
         `Loop: ${loopEnabled ? "ON" : "OFF"}`,
-        `Now playing: ${activePlayback ? `${activePlayback.type} ${shortUrl(activePlayback.url)} @~${Math.floor(getCurrentOffsetSeconds(activePlayback))}s` : "-"}`,
+        `Now playing: ${activePlayback ? `${activePlayback.type} ${shortUrl(activePlayback.sourceUrl)} @~${Math.floor(getCurrentOffsetSeconds(activePlayback))}s` : "-"}`,
         `Queue (${queue.length}):`
     ];
     if (queue.length === 0) lines.push("- kosong");
-    else queue.slice(0, 10).forEach((item, i) => lines.push(`${i + 1}. ${item.type} ${shortUrl(item.url)}`));
+    else queue.slice(0, 10).forEach((item, i) => lines.push(`${i + 1}. ${item.type} ${shortUrl(item.sourceUrl)}`));
     return lines.join("\n");
 }
 
@@ -343,7 +347,7 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
 
     const playbackController = new AbortController();
     let seekSeconds = Math.max(0, Math.floor(startOffsetSeconds));
-    const metadata = await getOrProbeMetadata(item.url);
+    const metadata = await getOrProbeMetadata(item.sourceUrl);
     if (metadata?.durationSeconds && Number.isFinite(metadata.durationSeconds)) {
         const maxSeek = Math.max(0, Math.floor(metadata.durationSeconds - 2));
         if (seekSeconds > maxSeek) {
@@ -366,7 +370,8 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         prepareOptions.customInputOptions = ["-ss", `${seekSeconds}`];
     }
 
-    const { command, output } = prepareStream(item.url, prepareOptions as never, playbackController.signal);
+    const resolvedStreamUrl = await resolvePlayableUrl(item.sourceUrl);
+    const { command, output } = prepareStream(resolvedStreamUrl, prepareOptions as never, playbackController.signal);
     command.on("start", (cmdline: string) => {
         console.log(`FFmpeg start (seek=${seekSeconds}s, type=${item.type}): ${cmdline}`);
     });
@@ -377,7 +382,8 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
 
     const serial = ++playbackSerial;
     activePlayback = {
-        url: item.url,
+        sourceUrl: item.sourceUrl,
+        resolvedUrl: resolvedStreamUrl,
         type: item.type,
         baseOffsetSeconds: seekSeconds,
         startedAtMs: Date.now(),
@@ -438,7 +444,7 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         if (reason === "seek" || reason === "tune" || reason === "skip" || reason === "switch") return;
 
         if (loopEnabled && endedPlayback) {
-            queue.unshift({ url: endedPlayback.url, type: endedPlayback.type });
+            queue.unshift({ sourceUrl: endedPlayback.sourceUrl, type: endedPlayback.type });
         }
 
         const contextMsg = latestMessageContext ?? msg;
@@ -552,6 +558,64 @@ async function getOrProbeMetadata(url: string): Promise<VideoMetadata | undefine
         metadataCache.set(url, metadata);
     }
     return metadata;
+}
+
+async function resolvePlayableUrl(sourceUrl: string): Promise<string> {
+    if (!isYouTubeUrl(sourceUrl)) return sourceUrl;
+
+    const cached = resolvedUrlCache.get(sourceUrl);
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.url;
+    }
+
+    const resolved = await resolveViaYoutubedlApi(sourceUrl);
+    resolvedUrlCache.set(sourceUrl, {
+        url: resolved,
+        expiresAt: Date.now() + 10 * 60 * 1000
+    });
+    return resolved;
+}
+
+function isYouTubeUrl(url: string): boolean {
+    const normalized = url.toLowerCase();
+    return normalized.includes("youtube.com/") || normalized.includes("youtu.be/") || normalized.startsWith("yt:");
+}
+
+async function resolveViaYoutubedlApi(sourceUrl: string): Promise<string> {
+    const endpoint = new URL(`${youtubeResolverBase}/download`);
+    endpoint.searchParams.set("url", sourceUrl);
+    endpoint.searchParams.set("type", "video");
+    if (youtubeResolverApiKey) {
+        endpoint.searchParams.set("apikey", youtubeResolverApiKey);
+    }
+
+    const response = await fetch(endpoint.toString(), {
+        method: "GET",
+        headers: {
+            "Accept": "application/json"
+        }
+    });
+
+    if (!response.ok) {
+        throw new Error(`YouTube resolver failed (${response.status})`);
+    }
+
+    const payload = await response.json() as {
+        fileUrl?: string;
+        url?: string;
+        data?: { fileUrl?: string; url?: string };
+    };
+
+    const fileUrl = payload.fileUrl || payload.url || payload.data?.fileUrl || payload.data?.url;
+    if (!fileUrl) {
+        throw new Error("YouTube resolver returned empty file URL");
+    }
+
+    if (/^https?:\/\//i.test(fileUrl)) {
+        return fileUrl;
+    }
+
+    return new URL(fileUrl, `${youtubeResolverBase}/`).toString();
 }
 
 function runFfprobe(url: string): Promise<ProbeResult> {
