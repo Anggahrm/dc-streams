@@ -15,6 +15,7 @@ const profilePresets = {
 type ProfileName = keyof typeof profilePresets;
 type StreamType = "go-live" | "camera";
 type QueueItem = { url: string; type: StreamType };
+type PendingRestart = { item: QueueItem; offsetSeconds: number; msg: Message };
 type ActivePlayback = {
     url: string;
     type: StreamType;
@@ -32,6 +33,7 @@ let queue: QueueItem[] = [];
 let loopEnabled = false;
 let latestMessageContext: Message | undefined;
 let playbackSerial = 0;
+let pendingRestart: PendingRestart | undefined;
 
 streamer.client.on("ready", () => {
     console.log(`--- ${streamer.client.user?.tag} is ready ---`);
@@ -256,8 +258,10 @@ function getCurrentOffsetSeconds(playback: ActivePlayback): number {
 
 async function restartCurrentPlayback(msg: Message, item: QueueItem, offsetSeconds: number, reason: ActivePlayback["stopReason"]): Promise<void> {
     if (activePlayback) {
+        pendingRestart = { item, offsetSeconds, msg };
         activePlayback.stopReason = reason;
         activePlayback.controller.abort();
+        return;
     }
     queue.unshift(item);
     await tryStartNextQueued(msg, offsetSeconds);
@@ -349,6 +353,13 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
 
         const reason = endedPlayback?.stopReason;
         activePlayback = undefined;
+
+        if (pendingRestart) {
+            const restart = pendingRestart;
+            pendingRestart = undefined;
+            await startPlayback(restart.msg, restart.item, restart.offsetSeconds);
+            return;
+        }
 
         if (reason === "disconnect") return;
         if (reason === "manual-stop") return;
