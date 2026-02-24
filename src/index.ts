@@ -32,7 +32,7 @@ type ActivePlayback = {
     stopReason: "natural-end" | "manual-stop" | "switch" | "disconnect" | "seek" | "tune" | "skip" | "error" | null;
 };
 
-let activeProfile: ProfileName = "medium";
+let activeProfile: ProfileName = resolveDefaultProfile();
 let activeStreamOpts = buildStreamOpts(activeProfile);
 const defaultSeekStepSeconds = 10;
 let activePlayback: ActivePlayback | undefined;
@@ -59,17 +59,17 @@ streamer.client.on("messageCreate", async (msg) => {
 
     if (msg.content.startsWith(".help")) {
         await safeReply(msg, [
-            "Perintah:",
-            ".play-live <url/youtube> (play / enqueue)",
-            ".play-cam <url> (play / enqueue)",
-            ".skip (lanjut queue berikutnya)",
-            ".stop-stream (stop stream, tetap di voice)",
-            ".disconnect (leave voice + clear queue)",
-            ".queue (lihat queue)",
+            "Commands:",
+            ".play-live <url/youtube>",
+            ".play-cam <url>",
+            ".skip",
+            ".stop-stream",
+            ".disconnect",
+            ".queue",
             ".loop on|off|toggle|show",
             ".tune show|low|medium|high",
-            ".back [detik] (default 10)",
-            ".forw [detik] (default 10)",
+            ".back [detik]",
+            ".forw [detik]",
             ".help"
         ].join("\n"));
         return;
@@ -106,7 +106,7 @@ streamer.client.on("messageCreate", async (msg) => {
             return;
         }
         if (!isProfileName(selectedProfile)) {
-            await safeReply(msg, "Profil tidak dikenal. Gunakan: .tune low | .tune medium | .tune high");
+            await safeReply(msg, "Profil tidak valid. Gunakan: .tune low | .tune medium | .tune high");
             return;
         }
 
@@ -116,7 +116,7 @@ streamer.client.on("messageCreate", async (msg) => {
         if (activePlayback) {
             const offsetSeconds = getCurrentOffsetSeconds(activePlayback);
             const current = { sourceUrl: activePlayback.sourceUrl, type: activePlayback.type };
-            await safeReply(msg, `Tuning diubah ke ${formatProfile(activeProfile, activeStreamOpts)}. Auto-apply dari ${Math.floor(offsetSeconds)}s...`);
+            await safeReply(msg, `Tuning diubah: ${formatProfile(activeProfile, activeStreamOpts)}. Diterapkan ke stream aktif.`);
             await restartCurrentPlayback(msg, current, offsetSeconds, "tune");
             return;
         }
@@ -127,7 +127,7 @@ streamer.client.on("messageCreate", async (msg) => {
 
     if (msg.content.startsWith(".back") || msg.content.startsWith(".forw")) {
         if (!activePlayback) {
-            await safeReply(msg, "Tidak ada stream aktif. Jalankan .play-live atau .play-cam dulu.");
+            await safeReply(msg, "Tidak ada stream aktif.");
             return;
         }
 
@@ -142,12 +142,12 @@ streamer.client.on("messageCreate", async (msg) => {
             const maxSeek = Math.max(0, metadata.durationSeconds - 2);
             if (targetOffsetSeconds > maxSeek) {
                 targetOffsetSeconds = maxSeek;
-                await safeReply(msg, `Target seek melewati durasi. Di-clamp ke ${Math.floor(targetOffsetSeconds)} detik.`);
+                await safeReply(msg, `Seek disesuaikan ke ${Math.floor(targetOffsetSeconds)} detik (mendekati akhir media).`);
             }
         }
 
         console.log(`Seek request: current=${Math.floor(currentOffsetSeconds)} step=${stepSeconds} target=${Math.floor(targetOffsetSeconds)}`);
-        await safeReply(msg, `Seek ke ${Math.floor(targetOffsetSeconds)} detik (${msg.content.startsWith(".back") ? "back" : "forw"} ${stepSeconds}s), stream akan restart...`);
+        await safeReply(msg, `Seek ke ${Math.floor(targetOffsetSeconds)} detik.`);
 
         const current = { sourceUrl: activePlayback.sourceUrl, type: activePlayback.type };
         await restartCurrentPlayback(msg, current, targetOffsetSeconds, "seek");
@@ -160,7 +160,7 @@ streamer.client.on("messageCreate", async (msg) => {
                 await safeReply(msg, "Tidak ada stream aktif. Menjalankan queue berikutnya...");
                 await tryStartNextQueued(msg);
             } else {
-                await safeReply(msg, "Tidak ada stream aktif dan queue kosong.");
+                await safeReply(msg, "Queue kosong.");
             }
             return;
         }
@@ -168,14 +168,14 @@ streamer.client.on("messageCreate", async (msg) => {
         const hasNext = queue.length > 0 || loopEnabled;
         activePlayback.stopReason = "skip";
         activePlayback.controller.abort();
-        await safeReply(msg, hasNext ? "Skip... lanjut item berikutnya." : "Skip... stream dihentikan (queue kosong)." );
+        await safeReply(msg, hasNext ? "Skip: lanjut ke item berikutnya." : "Skip: stream dihentikan, queue kosong.");
         return;
     }
 
     if (msg.content.startsWith(".play-live") || msg.content.startsWith(".play-cam")) {
         const args = parseArgs(msg.content);
         if (!args) {
-            await safeReply(msg, "Gunakan: .play-live <url> atau .play-cam <url>");
+            await safeReply(msg, "Format: .play-live <url> atau .play-cam <url>");
             return;
         }
 
@@ -189,7 +189,7 @@ streamer.client.on("messageCreate", async (msg) => {
 
         if (activePlayback) {
             queue.push(item);
-            await safeReply(msg, `Ditambahkan ke queue (#${queue.length}): ${type} ${shortUrl(args.url)}`);
+            await safeReply(msg, `Masuk queue (#${queue.length}): ${shortUrl(args.url)}`);
             return;
         }
 
@@ -215,15 +215,15 @@ streamer.client.on("messageCreate", async (msg) => {
         if (activePlayback) {
             activePlayback.stopReason = "manual-stop";
             activePlayback.controller.abort();
-            await safeReply(msg, "Stream dihentikan. Tetap stay di voice.");
+            await safeReply(msg, "Stream dihentikan. Tetap di voice.");
         } else {
-            await safeReply(msg, "Tidak ada stream aktif. Tetap stay di voice.");
+            await safeReply(msg, "Tidak ada stream aktif.");
         }
         return;
     }
     } catch (error) {
         console.log("messageCreate handler error", error);
-        await safeReply(msg, "Command gagal diproses (resolver timeout/error). Bot tetap online, coba lagi.");
+        await safeReply(msg, "Command gagal diproses. Coba lagi.");
     }
 });
 
@@ -351,7 +351,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds = 0): Promise<void> {
     const joined = await ensureVoiceJoined(msg);
     if (!joined) {
-        await safeReply(msg, "Masuk voice channel dulu.");
+        await safeReply(msg, "Masuk voice channel terlebih dahulu.");
         return;
     }
 
@@ -390,7 +390,7 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         output = prepared.output;
     } catch (error) {
         console.log("resolve/prepare playback failed", error);
-        await safeReply(msg, "Gagal resolve source (timeout/down). Request dibatalkan, bot tetap online.");
+        await safeReply(msg, "Gagal memproses source. Coba lagi beberapa saat.");
         if (queue.length > 0) {
             await tryStartNextQueued(msg);
         }
@@ -456,7 +456,7 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
             const restart = pendingRestart;
             pendingRestart = undefined;
             if (restart.cause === "disconnect-recover" && restart.retries > 1) {
-                await safeReply(restart.msg, "Gagal recover voice connection saat restart stream.");
+                await safeReply(restart.msg, "Gagal memulihkan koneksi voice untuk melanjutkan stream.");
                 return;
             }
             await startPlayback(restart.msg, restart.item, restart.offsetSeconds);
@@ -475,7 +475,7 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
         if (queue.length > 0) {
             await tryStartNextQueued(contextMsg);
         } else if (endedPlayback) {
-            await safeReply(contextMsg, "Stream selesai. Tetap stay di voice. Gunakan .disconnect untuk keluar.");
+            await safeReply(contextMsg, "Stream selesai. Tetap di voice channel.");
         }
     }
 }
@@ -571,7 +571,14 @@ async function probeVideoMetadata(url: string): Promise<VideoMetadata | undefine
 }
 
 function formatMetadataReply(metadata: VideoMetadata): string {
-    return `Metadata: durasi=${metadata.durationText}, resolusi=${metadata.resolution}, fps=${metadata.fps}, vcodec=${metadata.videoCodec}, acodec=${metadata.audioCodec}`;
+    return `Media: ${metadata.durationText} | ${metadata.resolution} | ${metadata.fps}fps | ${metadata.videoCodec}/${metadata.audioCodec}`;
+}
+
+function resolveDefaultProfile(): ProfileName {
+    const configured = process.env.STREAM_PROFILE?.trim().toLowerCase();
+    if (configured && isProfileName(configured)) return configured;
+    if (process.env.DYNO) return "low";
+    return "medium";
 }
 
 async function getOrProbeMetadata(url: string): Promise<VideoMetadata | undefined> {
