@@ -26,6 +26,8 @@ Use env vars to avoid storing secrets in `src/config.json`:
 - `ACCEPTED_AUTHORS`: comma-separated user IDs, example `123,456`.
 - `YTDL_API_BASE`: YouTube resolver API base (default `https://youtubedl.siputzx.my.id`).
 - `YTDL_API_KEY`: optional API key for resolver.
+- `YTDL_POLL_INTERVAL_MS`: resolver polling interval in ms (default `2000`).
+- `YTDL_POLL_TIMEOUT_MS`: resolver polling timeout in ms (default `60000`).
 - `STREAM_WIDTH`, `STREAM_HEIGHT`, `STREAM_FPS`
 - `STREAM_BITRATE_KBPS`, `STREAM_MAX_BITRATE_KBPS`
 - `STREAM_HW_ACCEL`: `true|false`

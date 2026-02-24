@@ -8,6 +8,8 @@ const runtimeConfig = resolveRuntimeConfig();
 const streamer = new Streamer(new Client());
 const youtubeResolverBase = (process.env.YTDL_API_BASE?.trim() || "https://youtubedl.siputzx.my.id").replace(/\/$/, "");
 const youtubeResolverApiKey = process.env.YTDL_API_KEY?.trim();
+const ytdlPollIntervalMs = Number(process.env.YTDL_POLL_INTERVAL_MS || "2000");
+const ytdlPollTimeoutMs = Number(process.env.YTDL_POLL_TIMEOUT_MS || "60000");
 
 const profilePresets = {
     low: { width: 854, height: 480, fps: 24, bitrateKbps: 800, maxBitrateKbps: 1400 },
@@ -583,39 +585,99 @@ function isYouTubeUrl(url: string): boolean {
 }
 
 async function resolveViaYoutubedlApi(sourceUrl: string): Promise<string> {
+    const headers: Record<string, string> = { "Accept": "application/json" };
+    const firstTry = await callResolverDownload(sourceUrl, headers);
+
+    if (firstTry.statusCode === 401) {
+        const powSession = await solveYtdlPowSession(sourceUrl);
+        headers.Cookie = `pow_session=${powSession}`;
+    } else if (firstTry.statusCode >= 400) {
+        throw new Error(`YouTube resolver failed (${firstTry.statusCode})`);
+    } else {
+        return await resolveDownloadPayloadToUrl(sourceUrl, firstTry.payload, headers);
+    }
+
+    const secondTry = await callResolverDownload(sourceUrl, headers);
+    if (secondTry.statusCode >= 400) {
+        throw new Error(`YouTube resolver failed after PoW (${secondTry.statusCode})`);
+    }
+
+    return await resolveDownloadPayloadToUrl(sourceUrl, secondTry.payload, headers);
+}
+
+type ResolverDownloadPayload = {
+    fileUrl?: string;
+    file_url?: string;
+    url?: string;
+    status?: string;
+    error?: string;
+    id?: string;
+    data?: { fileUrl?: string; url?: string };
+};
+
+function extractResolvedFileUrl(payload: ResolverDownloadPayload): string {
+    const fileUrl = payload.fileUrl || payload.file_url || payload.url || payload.data?.fileUrl || payload.data?.url;
+    if (!fileUrl) throw new Error("YouTube resolver returned empty file URL");
+    if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+    return new URL(fileUrl, `${youtubeResolverBase}/`).toString();
+}
+
+async function resolveDownloadPayloadToUrl(sourceUrl: string, payload: ResolverDownloadPayload, headers: Record<string, string>): Promise<string> {
+    if (hasResolverFileUrl(payload)) {
+        return extractResolvedFileUrl(payload);
+    }
+
+    const status = payload.status?.toLowerCase();
+    if (status === "failed" || status === "error") {
+        throw new Error(`Resolver download failed: ${payload.error || "unknown"}`);
+    }
+
+    if (status === "downloading" || status === "processing" || status === "queued") {
+        return await pollResolverFileUrl(sourceUrl, headers);
+    }
+
+    throw new Error("Resolver response missing file URL");
+}
+
+async function pollResolverFileUrl(sourceUrl: string, headers: Record<string, string>): Promise<string> {
+    const start = Date.now();
+    while (Date.now() - start < ytdlPollTimeoutMs) {
+        await sleep(ytdlPollIntervalMs);
+        const result = await callResolverDownload(sourceUrl, headers);
+        if (result.statusCode >= 400) {
+            throw new Error(`Resolver polling failed (${result.statusCode})`);
+        }
+
+        if (hasResolverFileUrl(result.payload)) {
+            return extractResolvedFileUrl(result.payload);
+        }
+
+        const status = result.payload.status?.toLowerCase();
+        if (status === "failed" || status === "error") {
+            throw new Error(`Resolver polling failed: ${result.payload.error || "unknown"}`);
+        }
+    }
+
+    throw new Error("Resolver polling timeout");
+}
+
+function hasResolverFileUrl(payload: ResolverDownloadPayload): boolean {
+    return Boolean(payload.fileUrl || payload.file_url || payload.data?.fileUrl || payload.data?.url);
+}
+
+async function callResolverDownload(sourceUrl: string, headers: Record<string, string>): Promise<{ statusCode: number; payload: ResolverDownloadPayload }> {
     const endpoint = new URL(`${youtubeResolverBase}/download`);
     endpoint.searchParams.set("url", sourceUrl);
     endpoint.searchParams.set("type", "video");
     if (youtubeResolverApiKey) endpoint.searchParams.set("apikey", youtubeResolverApiKey);
 
-    const headers: Record<string, string> = { "Accept": "application/json" };
-    const firstTry = await fetch(endpoint.toString(), { method: "GET", headers });
-
-    if (firstTry.ok) {
-        return extractResolvedFileUrl(await firstTry.json() as ResolverDownloadPayload);
-    }
-
-    const powSession = await solveYtdlPowSession(sourceUrl);
-    headers.Cookie = `pow_session=${powSession}`;
-    const secondTry = await fetch(endpoint.toString(), { method: "GET", headers });
-    if (!secondTry.ok) {
-        throw new Error(`YouTube resolver failed after PoW (${secondTry.status})`);
-    }
-
-    return extractResolvedFileUrl(await secondTry.json() as ResolverDownloadPayload);
+    const response = await fetch(endpoint.toString(), { method: "GET", headers });
+    const payload = await response.json().catch(() => ({} as ResolverDownloadPayload));
+    return { statusCode: response.status, payload };
 }
 
-type ResolverDownloadPayload = {
-    fileUrl?: string;
-    url?: string;
-    data?: { fileUrl?: string; url?: string };
-};
-
-function extractResolvedFileUrl(payload: ResolverDownloadPayload): string {
-    const fileUrl = payload.fileUrl || payload.url || payload.data?.fileUrl || payload.data?.url;
-    if (!fileUrl) throw new Error("YouTube resolver returned empty file URL");
-    if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
-    return new URL(fileUrl, `${youtubeResolverBase}/`).toString();
+async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function solveYtdlPowSession(sourceUrl: string): Promise<string> {
