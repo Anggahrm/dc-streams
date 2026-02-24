@@ -199,8 +199,12 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
     controller = new AbortController();
     const playbackController = controller;
 
-    const customInputOptions = startOffsetSeconds > 0
-        ? ["-ss", `${Math.floor(startOffsetSeconds)}`]
+    const seekSeconds = Math.max(0, Math.floor(startOffsetSeconds));
+    const customInputOptions = seekSeconds > 0
+        ? ["-ss", `${seekSeconds}`]
+        : undefined;
+    const customFfmpegFlags = seekSeconds > 0
+        ? ["-ss", `${seekSeconds}`]
         : undefined;
 
     const prepareOptions: Record<string, unknown> = {
@@ -215,8 +219,14 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
     if (customInputOptions) {
         prepareOptions.customInputOptions = customInputOptions;
     }
+    if (customFfmpegFlags) {
+        prepareOptions.customFfmpegFlags = customFfmpegFlags;
+    }
 
     const { command, output } = prepareStream(url, prepareOptions as never, playbackController.signal);
+    command.on("start", (cmdline: string) => {
+        console.log(`FFmpeg start (seek=${seekSeconds}s): ${cmdline}`);
+    });
     command.on("error", (err: unknown) => {
         console.log("An error happened with ffmpeg");
         console.log(err);
