@@ -332,9 +332,17 @@ async function startPlayback(msg: Message, item: QueueItem, startOffsetSeconds =
             }
         }
     } finally {
+        if (activePlayback && activePlayback.controller !== playbackController) {
+            return;
+        }
+
         const endedPlayback = activePlayback && activePlayback.controller === playbackController ? activePlayback : undefined;
+        if (!endedPlayback) {
+            return;
+        }
+
         const reason = endedPlayback?.stopReason;
-        if (endedPlayback) activePlayback = undefined;
+        activePlayback = undefined;
 
         if (reason === "disconnect") return;
         if (reason === "manual-stop") return;
