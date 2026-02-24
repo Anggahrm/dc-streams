@@ -199,7 +199,7 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
     controller = new AbortController();
     const playbackController = controller;
 
-    const customFfmpegFlags = startOffsetSeconds > 0
+    const customInputOptions = startOffsetSeconds > 0
         ? ["-ss", `${Math.floor(startOffsetSeconds)}`]
         : undefined;
 
@@ -212,8 +212,8 @@ async function startPlayback(msg: Message, url: string, type: StreamType, startO
         hardwareAcceleratedDecoding: activeStreamOpts.hardware_acceleration,
         videoCodec: Utils.normalizeVideoCodec(activeStreamOpts.videoCodec)
     };
-    if (customFfmpegFlags) {
-        prepareOptions.customFfmpegFlags = customFfmpegFlags;
+    if (customInputOptions) {
+        prepareOptions.customInputOptions = customInputOptions;
     }
 
     const { command, output } = prepareStream(url, prepareOptions as never, playbackController.signal);

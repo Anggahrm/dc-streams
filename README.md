@@ -29,5 +29,6 @@ Use env vars to avoid storing secrets in `src/config.json`:
 
 - `Procfile` uses worker process: `worker: npm run start`
 - `Aptfile` installs system `ffmpeg`
+- Deploy can use bundled local package source to keep `customInputOptions` seek behavior.
 - Required config var for apt runtime libs:
   - `LD_LIBRARY_PATH=/app/.apt/usr/lib/x86_64-linux-gnu:/app/.apt/usr/lib/x86_64-linux-gnu/pulseaudio:/app/.apt/usr/lib/x86_64-linux-gnu/blas:/app/.apt/usr/lib/x86_64-linux-gnu/lapack:/app/.apt/lib/x86_64-linux-gnu:/app/.apt/usr/lib`
