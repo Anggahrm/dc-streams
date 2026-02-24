@@ -8,6 +8,7 @@ const runtimeConfig = resolveRuntimeConfig();
 const streamer = new Streamer(new Client());
 const youtubeResolverBase = (process.env.YTDL_API_BASE?.trim() || "https://youtubedl.siputzx.my.id").replace(/\/$/, "");
 const youtubeResolverApiKey = process.env.YTDL_API_KEY?.trim();
+const youtubeResolverMediaType = (process.env.YTDL_MEDIA_TYPE?.trim() || "merge").toLowerCase();
 const ytdlPollIntervalMs = Number(process.env.YTDL_POLL_INTERVAL_MS || "2000");
 const ytdlPollTimeoutMs = Number(process.env.YTDL_POLL_TIMEOUT_MS || "60000");
 
@@ -668,7 +669,7 @@ function hasResolverFileUrl(payload: ResolverDownloadPayload): boolean {
 async function callResolverDownload(sourceUrl: string, headers: Record<string, string>): Promise<{ statusCode: number; payload: ResolverDownloadPayload }> {
     const endpoint = new URL(`${youtubeResolverBase}/download`);
     endpoint.searchParams.set("url", sourceUrl);
-    endpoint.searchParams.set("type", "video");
+    endpoint.searchParams.set("type", youtubeResolverMediaType);
     if (youtubeResolverApiKey) endpoint.searchParams.set("apikey", youtubeResolverApiKey);
 
     const response = await fetch(endpoint.toString(), { method: "GET", headers });
@@ -687,7 +688,7 @@ async function solveYtdlPowSession(sourceUrl: string): Promise<string> {
             "Content-Type": "application/json",
             "Accept": "application/json"
         },
-        body: JSON.stringify({ url: sourceUrl, type: "video" })
+        body: JSON.stringify({ url: sourceUrl, type: youtubeResolverMediaType })
     });
     if (!challengeRes.ok) {
         throw new Error(`YouTube resolver challenge failed (${challengeRes.status})`);
@@ -702,7 +703,7 @@ async function solveYtdlPowSession(sourceUrl: string): Promise<string> {
             "Content-Type": "application/json",
             "Accept": "application/json"
         },
-        body: JSON.stringify({ url: sourceUrl, type: "video", nonce })
+        body: JSON.stringify({ url: sourceUrl, type: youtubeResolverMediaType, nonce })
     });
 
     if (!verifyRes.ok) {
