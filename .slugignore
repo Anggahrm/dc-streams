@@ -1,0 +1,5 @@
+docs/
+.opencode/
+vendor/discord-video-stream/src/
+vendor/discord-video-stream/node_modules/
+*.log
