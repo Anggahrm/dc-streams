@@ -262,6 +262,7 @@ export class StreamController {
                     return;
                 }
                 if (this.shouldRefreshResolvedUrl(error, item.sourceUrl)) {
+                    this.markSourceFailure(item.sourceUrl);
                     this.youtubeResolverService.invalidate(item.sourceUrl);
                     this.state.pendingRestart = {
                         item,
@@ -344,6 +345,9 @@ export class StreamController {
 
     private shouldRefreshResolvedUrl(error: unknown, sourceUrl: string): boolean {
         const normalizedSource = sourceUrl.toLowerCase();
+        const failures = this.failedSources.get(sourceUrl)?.count ?? 0;
+        if (failures > 0) return false;
+
         if (normalizedSource.includes("youtube.com/") || normalizedSource.includes("youtu.be/") || normalizedSource.startsWith("yt:")) {
             if (error instanceof Error) {
                 const text = error.message.toLowerCase();
