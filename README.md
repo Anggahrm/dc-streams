@@ -17,6 +17,11 @@ This example shows how to stream a video, both using the existing voice connecti
 
 Detailed notes: `docs/refactor-architecture.md`.
 
+## YouTube resolver env
+
+- `YTDL_CACHE_TTL_MS` (default `45000`): cache TTL untuk resolved direct file URL YouTube.
+  TTL pendek mengurangi risiko URL expired (loading terus).
+
 ## Commands
 
 - `.play-live <url>`: start Go Live stream from URL.

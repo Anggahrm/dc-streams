@@ -12,6 +12,7 @@ type YoutubeResolverOptions = {
 
 export class YouTubeResolverService {
     private readonly cache = new Map<string, { url: string; expiresAt: number }>();
+    private readonly cacheTtlMs = Math.max(0, Number(process.env.YTDL_CACHE_TTL_MS || "45000"));
 
     constructor(private readonly options: YoutubeResolverOptions) {}
 
@@ -19,10 +20,16 @@ export class YouTubeResolverService {
         if (!this.isYouTubeUrl(sourceUrl)) return sourceUrl;
 
         const cached = this.cache.get(sourceUrl);
-        if (cached && cached.expiresAt > Date.now()) return cached.url;
+        if (cached && cached.expiresAt > Date.now()) {
+            const stillValid = await this.isResolvedUrlUsable(cached.url);
+            if (stillValid) return cached.url;
+            this.cache.delete(sourceUrl);
+        }
 
         const resolved = await this.resolveViaApi(sourceUrl);
-        this.cache.set(sourceUrl, { url: resolved, expiresAt: Date.now() + 10 * 60 * 1000 });
+        if (this.cacheTtlMs > 0) {
+            this.cache.set(sourceUrl, { url: resolved, expiresAt: Date.now() + this.cacheTtlMs });
+        }
         return resolved;
     }
 
@@ -152,5 +159,18 @@ export class YouTubeResolverService {
             if (hash.startsWith(prefix)) return nonce;
         }
         throw new Error(`Failed to solve PoW difficulty ${difficulty}`);
+    }
+
+    private async isResolvedUrlUsable(url: string): Promise<boolean> {
+        try {
+            const response = await fetch(url, {
+                method: "GET",
+                headers: { Range: "bytes=0-0" },
+                signal: AbortSignal.timeout(6000)
+            });
+            return response.ok || response.status === 206;
+        } catch {
+            return false;
+        }
     }
 }

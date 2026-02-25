@@ -30,8 +30,7 @@ export function resolveRuntimeConfig(): RuntimeConfig {
 export function resolveDefaultProfile(): ProfileName {
     const configured = process.env.STREAM_PROFILE?.trim().toLowerCase();
     if (configured && isProfileName(configured)) return configured;
-    if (process.env.DYNO) return "low";
-    return "medium";
+    return "high";
 }
 
 export function isProfileName(value: string): value is ProfileName {
