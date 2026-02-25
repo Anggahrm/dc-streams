@@ -15,7 +15,8 @@
     },
     "scripts": {
         "build": "tsc",
-        "heroku-postbuild": "npm run build",
+        "heroku-postbuild": "npm run build && npm run prune:slug",
+        "prune:slug": "node ./scripts/heroku-prune.mjs",
         "start": "node ./dist/index.js",
         "yeet": "npm run build && npm run start"
     },
