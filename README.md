@@ -2,6 +2,21 @@
 
 This example shows how to stream a video, both using the existing voice connection or with a Go Live connection, using the new API introduced in v4.1.3
 
+## Architecture (refactored)
+
+- `src/index.ts`: app bootstrap and dependency wiring.
+- `src/commands/router.ts`: command parsing + dispatch.
+- `src/controller/stream-controller.ts`: queue, playback lifecycle, restart logic.
+- `src/services/metadata-service.ts`: ffprobe metadata probing/cache.
+- `src/services/youtube-resolver-service.ts`: YouTube URL resolver + cache.
+- `src/state/app-state.ts`: runtime mutable state.
+- `src/config/runtime.ts`: env/config resolution and stream profiles.
+- `src/formatters/queue.ts`: queue status formatter.
+- `src/utils/*`: common helpers (reply/logger/media/async/command).
+- `src/types.ts`: shared domain types.
+
+Detailed notes: `docs/refactor-architecture.md`.
+
 ## Commands
 
 - `.play-live <url>`: start Go Live stream from URL.
