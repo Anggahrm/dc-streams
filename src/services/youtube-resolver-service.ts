@@ -182,6 +182,16 @@ export class YouTubeResolverService {
                     return normalized.toString();
                 }
 
+                if (parsed.pathname.startsWith("/live/")) {
+                    const liveId = parsed.pathname.split("/").filter(Boolean)[1];
+                    if (!liveId) return sourceUrl;
+                    const normalized = new URL("https://www.youtube.com/watch");
+                    normalized.searchParams.set("v", liveId);
+                    const t = parsed.searchParams.get("t");
+                    if (t) normalized.searchParams.set("t", t);
+                    return normalized.toString();
+                }
+
                 if (parsed.pathname.startsWith("/shorts/")) {
                     return `https://www.youtube.com${parsed.pathname}`;
                 }
