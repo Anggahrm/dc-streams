@@ -2,7 +2,7 @@ import type {
     AnimeSearchResult,
     AnimeDetail,
     AnimeEpisode,
-    AnimeServerResult,
+    AnimeDownloadQuality,
     DonghuaSearchResult,
     DonghuaDetail,
     DonghuaEpisode
@@ -38,56 +38,87 @@ async function apiFetch<T>(path: string): Promise<T | undefined> {
     }
 }
 
-// --- Anime (Otakudesu) ---
+// --- Anime (Samehadaku) ---
 
 export async function searchAnime(keyword: string): Promise<AnimeSearchResult[]> {
-    const data = await apiFetch<{ animeList: AnimeSearchResult[] }>(`/search/${encodeURIComponent(keyword)}`);
+    const data = await apiFetch<{ animeList: AnimeSearchResult[] }>(`/samehadaku/search?q=${encodeURIComponent(keyword)}`);
     return data?.animeList ?? [];
 }
 
 export async function getAnimeDetail(slug: string): Promise<AnimeDetail | undefined> {
     type RawDetail = {
-        title: string;
+        title?: string;
         poster: string;
         status: string;
-        score: string;
-        synopsis: string;
+        english?: string;
+        score?: string | { value?: string };
+        synopsis?: string | { paragraphs?: string[] };
         genreList?: Array<{ title: string; genreId: string; href: string }>;
-        episodeList?: Array<{ title: string; episodeId: string; href: string }>;
+        episodeList?: Array<{ title: string | number; episodeId: string; href: string }>;
     };
-    const data = await apiFetch<RawDetail>(`/anime/${encodeURIComponent(slug)}`);
+    const data = await apiFetch<RawDetail>(`/samehadaku/anime/${encodeURIComponent(slug)}`);
     if (!data) return undefined;
+
+    const score = typeof data.score === "string" ? data.score : (data.score?.value ?? "");
+    const synopsis = typeof data.synopsis === "string"
+        ? data.synopsis
+        : (data.synopsis?.paragraphs ?? []).join("\n\n");
+
     return {
-        title: data.title,
+        title: data.title || data.english || slug,
         poster: data.poster,
         status: data.status,
-        score: data.score,
-        synopsis: data.synopsis ?? "",
+        score,
+        synopsis,
         genres: data.genreList?.map((g) => g.title) ?? [],
-        episodeList: data.episodeList ?? []
+        episodeList: (data.episodeList ?? []).map((ep) => ({
+            ...ep,
+            title: String(ep.title)
+        }))
     };
 }
 
 export async function getAnimeEpisode(slug: string): Promise<AnimeEpisode | undefined> {
-    return apiFetch<AnimeEpisode>(`/episode/${encodeURIComponent(slug)}`);
+    return apiFetch<AnimeEpisode>(`/samehadaku/episode/${encodeURIComponent(slug)}`);
 }
 
-export async function getAnimeServerUrl(serverId: string): Promise<string | undefined> {
-    const data = await apiFetch<AnimeServerResult>(`/server/${encodeURIComponent(serverId)}`);
-    return data?.url;
+const PIXELDRAIN_PAGE_RE = /pixeldrain\.com\/u\/([A-Za-z0-9]+)/;
+
+function toPixeldrainDirectUrl(pageUrl: string): string | undefined {
+    const match = PIXELDRAIN_PAGE_RE.exec(pageUrl);
+    if (!match) return undefined;
+    return `https://pixeldrain.com/api/file/${match[1]}`;
 }
 
-function pickBestServer(episode: AnimeEpisode): string | undefined {
-    const qualities = episode.server?.qualities ?? [];
+function isPixeldrainSource(title: string): boolean {
+    return title.trim().toLowerCase() === "pixeldrain";
+}
+
+function pickBestDownloadUrl(episode: AnimeEpisode): string | undefined {
+    const formats = episode.downloadUrl?.formats;
+    if (!formats?.length) return undefined;
+
+    const allQualities: AnimeDownloadQuality[] = formats.flatMap((f) => f.qualities);
     const preferred = ["720p", "480p", "360p", "1080p"];
+
     for (const pref of preferred) {
-        const quality = qualities.find((q) => q.title.includes(pref));
-        const server = quality?.serverList?.[0];
-        if (server) return server.serverId;
+        const quality = allQualities.find((q) => q.title.includes(pref));
+        if (!quality) continue;
+        const pd = quality.urls.find((u) => isPixeldrainSource(u.title));
+        if (pd) {
+            const direct = toPixeldrainDirectUrl(pd.url);
+            if (direct) return direct;
+        }
     }
-    for (const quality of qualities) {
-        if (quality.serverList.length > 0) return quality.serverList[0].serverId;
+
+    for (const quality of allQualities) {
+        const pd = quality.urls.find((u) => isPixeldrainSource(u.title));
+        if (pd) {
+            const direct = toPixeldrainDirectUrl(pd.url);
+            if (direct) return direct;
+        }
     }
+
     return undefined;
 }
 
@@ -95,16 +126,14 @@ export async function resolveAnimeStreamUrl(episodeSlug: string): Promise<{ url:
     const episode = await getAnimeEpisode(episodeSlug);
     if (!episode) return undefined;
 
-    if (episode.defaultStreamingUrl) {
-        return { url: episode.defaultStreamingUrl, title: episode.title };
+    const directUrl = pickBestDownloadUrl(episode);
+    if (directUrl) {
+        logInfo(`Resolved anime stream via Pixeldrain: ${directUrl}`);
+        return { url: directUrl, title: episode.title };
     }
 
-    const serverId = pickBestServer(episode);
-    if (!serverId) return undefined;
-
-    const serverUrl = await getAnimeServerUrl(serverId);
-    if (!serverUrl) return undefined;
-    return { url: serverUrl, title: episode.title };
+    logInfo("No Pixeldrain download URL found for episode, no fallback available");
+    return undefined;
 }
 
 // --- Donghua ---
@@ -153,12 +182,37 @@ export async function getDonghuaEpisode(slug: string): Promise<DonghuaEpisode | 
     }
 }
 
+const ANICHIN_STREAM_ID_RE = /anichin\.stream\/?\?id=([A-Za-z0-9]+)/;
+
+function toAnichinHlsUrl(pageUrl: string): string | undefined {
+    const match = ANICHIN_STREAM_ID_RE.exec(pageUrl);
+    if (!match) return undefined;
+    return `https://anichin.stream/hls/${match[1]}.m3u8`;
+}
+
 export async function resolveDonghuaStreamUrl(episodeSlug: string): Promise<{ url: string; title: string } | undefined> {
     const episode = await getDonghuaEpisode(episodeSlug);
     if (!episode) return undefined;
 
-    const url = episode.defaultStreamingUrl || episode.streamUrl;
-    if (url) return { url, title: episode.title ?? episodeSlug };
+    const title = episode.donghua_details?.title ?? episode.episode ?? episodeSlug;
 
+    const mainUrl = episode.streaming?.main_url?.url;
+    if (mainUrl) {
+        const hlsUrl = toAnichinHlsUrl(mainUrl);
+        if (hlsUrl) {
+            logInfo(`Resolved donghua stream via anichin HLS: ${hlsUrl}`);
+            return { url: hlsUrl, title };
+        }
+    }
+
+    for (const server of episode.streaming?.servers ?? []) {
+        const hlsUrl = toAnichinHlsUrl(server.url);
+        if (hlsUrl) {
+            logInfo(`Resolved donghua stream via anichin HLS (server ${server.name}): ${hlsUrl}`);
+            return { url: hlsUrl, title };
+        }
+    }
+
+    logInfo("No anichin HLS URL found for donghua episode, no fallback available");
     return undefined;
 }

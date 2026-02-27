@@ -117,6 +117,16 @@ export type AnimeDetail = {
     }>;
 };
 
+export type AnimeDownloadQuality = {
+    title: string;
+    urls: Array<{ title: string; url: string }>;
+};
+
+export type AnimeDownloadFormat = {
+    title: string;
+    qualities: AnimeDownloadQuality[];
+};
+
 export type AnimeEpisode = {
     title: string;
     animeId: string;
@@ -133,10 +143,9 @@ export type AnimeEpisode = {
             }>;
         }>;
     };
-};
-
-export type AnimeServerResult = {
-    url: string;
+    downloadUrl?: {
+        formats: AnimeDownloadFormat[];
+    };
 };
 
 export type DonghuaSearchResult = {
@@ -165,12 +174,20 @@ export type DonghuaDetail = {
     }>;
 };
 
+export type DonghuaStreamingServer = {
+    name: string;
+    url: string;
+};
+
 export type DonghuaEpisode = {
-    title: string;
-    defaultStreamingUrl?: string;
-    streamUrl?: string;
-    downloadLinks?: Array<{
-        quality: string;
-        urls: Array<{ title: string; url: string }>;
-    }>;
+    episode: string;
+    streaming: {
+        main_url: DonghuaStreamingServer;
+        servers: DonghuaStreamingServer[];
+    };
+    donghua_details?: {
+        title: string;
+        slug: string;
+        poster: string;
+    };
 };
