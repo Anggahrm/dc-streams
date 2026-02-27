@@ -94,9 +94,9 @@ export class StreamController {
             : "**Skip successful**\nStream stopped, queue is empty.";
     }
 
-    async enqueueAndPlay(msg: Message, url: string, type: StreamType, requestedByOwner: boolean): Promise<string> {
+    async enqueueAndPlay(msg: Message, url: string, type: StreamType, requestedByOwner: boolean, inputOptions?: string[]): Promise<string> {
         const metadata = await this.metadataService.getOrProbe(url);
-        const item: QueueItem = { sourceUrl: url, type, requestedByOwner };
+        const item: QueueItem = { sourceUrl: url, type, requestedByOwner, inputOptions };
 
         if (this.state.activePlayback) {
             if (requestedByOwner) {
@@ -278,7 +278,10 @@ export class StreamController {
             hardwareAcceleratedDecoding: this.state.activeStreamOpts.hardware_acceleration,
             videoCodec: Utils.normalizeVideoCodec(this.state.activeStreamOpts.videoCodec)
         };
-        if (seekSeconds > 0) prepareOptions.customInputOptions = ["-ss", `${seekSeconds}`];
+        const customInputOptions: string[] = [];
+        if (seekSeconds > 0) customInputOptions.push("-ss", `${seekSeconds}`);
+        if (item.inputOptions?.length) customInputOptions.push(...item.inputOptions);
+        if (customInputOptions.length > 0) prepareOptions.customInputOptions = customInputOptions;
 
         let output: ReturnType<typeof prepareStream>["output"];
         let resolvedStreamUrl = item.sourceUrl;

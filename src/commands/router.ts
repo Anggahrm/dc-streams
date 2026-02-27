@@ -166,7 +166,7 @@ const commands: Array<{ prefix: string; handler: CommandHandler }> = [
                 await safeReply(msg, `**Failed to resolve stream**\nEpisode: \`${episodeSlug}\`\nThe server may be unavailable.`);
                 return;
             }
-            const message = await controller.enqueueAndPlay(msg, result.url, "go-live", isOwnerAuthor);
+            const message = await controller.enqueueAndPlay(msg, result.url, "go-live", isOwnerAuthor, result.inputOptions);
             if (message) {
                 await safeReply(msg, `**Anime:** ${result.title}\n${message}`);
             } else {

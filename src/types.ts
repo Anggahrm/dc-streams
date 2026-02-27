@@ -19,6 +19,7 @@ export type QueueItem = {
     sourceUrl: string;
     type: StreamType;
     requestedByOwner?: boolean;
+    inputOptions?: string[];
 };
 
 export type StopReason =
@@ -146,6 +147,12 @@ export type AnimeEpisode = {
     downloadUrl?: {
         formats: AnimeDownloadFormat[];
     };
+};
+
+export type AnimeStreamResult = {
+    url: string;
+    title: string;
+    inputOptions?: string[];
 };
 
 export type DonghuaSearchResult = {

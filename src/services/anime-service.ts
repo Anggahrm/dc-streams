@@ -3,6 +3,7 @@ import type {
     AnimeDetail,
     AnimeEpisode,
     AnimeDownloadQuality,
+    AnimeStreamResult,
     DonghuaSearchResult,
     DonghuaDetail,
     DonghuaEpisode
@@ -122,17 +123,100 @@ function pickBestDownloadUrl(episode: AnimeEpisode): string | undefined {
     return undefined;
 }
 
-export async function resolveAnimeStreamUrl(episodeSlug: string): Promise<{ url: string; title: string } | undefined> {
+// --- Server-based fallback ---
+
+type AnimeServerResponse = { url: string };
+
+async function getAnimeServerUrl(serverId: string): Promise<string | undefined> {
+    const data = await apiFetch<AnimeServerResponse>(`/samehadaku/server/${encodeURIComponent(serverId)}`);
+    return data?.url;
+}
+
+const KRAKENFILES_SOURCE_RE = /<source\s+src="([^"]+)"/;
+const KRAKENCLOUD_HOST_RE = /krakencloud\.net/;
+
+async function resolveKrakenfilesDirectUrl(embedUrl: string): Promise<string | undefined> {
+    try {
+        const response = await fetch(embedUrl, {
+            headers: { Accept: "text/html" },
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+        });
+        if (!response.ok) return undefined;
+        const html = await response.text();
+        const match = KRAKENFILES_SOURCE_RE.exec(html);
+        return match?.[1];
+    } catch (error) {
+        logError(`Krakenfiles embed fetch error: ${embedUrl}`, error);
+        return undefined;
+    }
+}
+
+function isKrakenfilesServer(title: string): boolean {
+    return title.trim().toLowerCase().includes("krakenfiles");
+}
+
+async function tryKrakenfilesServers(episode: AnimeEpisode): Promise<AnimeStreamResult | undefined> {
+    for (const quality of episode.server?.qualities ?? []) {
+        for (const server of quality.serverList) {
+            if (!isKrakenfilesServer(server.title)) continue;
+
+            logInfo(`Trying Krakenfiles server: ${server.title} (${server.serverId})`);
+            const embedUrl = await getAnimeServerUrl(server.serverId);
+            if (!embedUrl) continue;
+
+            const directUrl = await resolveKrakenfilesDirectUrl(embedUrl);
+            if (!directUrl) continue;
+
+            logInfo(`Resolved anime stream via Krakenfiles: ${directUrl}`);
+            return {
+                url: directUrl,
+                title: episode.title,
+                inputOptions: KRAKENCLOUD_HOST_RE.test(directUrl) ? ["-user_agent", "curl/8.5.0"] : undefined
+            };
+        }
+    }
+    return undefined;
+}
+
+async function tryPixeldrainServers(episode: AnimeEpisode): Promise<AnimeStreamResult | undefined> {
+    for (const quality of episode.server?.qualities ?? []) {
+        for (const server of quality.serverList) {
+            if (!isPixeldrainSource(server.title)) continue;
+
+            logInfo(`Trying Pixeldrain server: ${server.title} (${server.serverId})`);
+            const pageUrl = await getAnimeServerUrl(server.serverId);
+            if (!pageUrl) continue;
+
+            const directUrl = toPixeldrainDirectUrl(pageUrl);
+            if (!directUrl) continue;
+
+            logInfo(`Resolved anime stream via Pixeldrain server: ${directUrl}`);
+            return { url: directUrl, title: episode.title };
+        }
+    }
+    return undefined;
+}
+
+export async function resolveAnimeStreamUrl(episodeSlug: string): Promise<AnimeStreamResult | undefined> {
     const episode = await getAnimeEpisode(episodeSlug);
     if (!episode) return undefined;
 
+    // 1. Pixeldrain download links (existing, fastest)
     const directUrl = pickBestDownloadUrl(episode);
     if (directUrl) {
-        logInfo(`Resolved anime stream via Pixeldrain: ${directUrl}`);
+        logInfo(`Resolved anime stream via Pixeldrain download: ${directUrl}`);
         return { url: directUrl, title: episode.title };
     }
 
-    logInfo("No Pixeldrain download URL found for episode, no fallback available");
+    // 2. Krakenfiles server (HTML scrape + UA workaround)
+    const krakenResult = await tryKrakenfilesServers(episode);
+    if (krakenResult) return krakenResult;
+
+    // 3. Pixeldrain server (may be expired, but worth trying)
+    const pdServerResult = await tryPixeldrainServers(episode);
+    if (pdServerResult) return pdServerResult;
+
+    logInfo("No playable stream URL found for episode after all fallbacks");
     return undefined;
 }
 
