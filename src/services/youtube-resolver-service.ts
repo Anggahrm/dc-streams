@@ -102,6 +102,7 @@ export class YouTubeResolverService {
         const start = Date.now();
         let lastRejectedUrl = avoidUrl;
         let pollCount = 0;
+        let completedUnusableCount = 0;
 
         while (Date.now() - start < this.options.pollTimeoutMs) {
             await sleep(this.options.pollIntervalMs);
@@ -115,9 +116,25 @@ export class YouTubeResolverService {
 
             if (this.hasResolverFileUrl(result.payload)) {
                 const candidate = this.extractResolvedFileUrl(result.payload);
-                if (lastRejectedUrl && candidate === lastRejectedUrl) continue;
+                const status = result.payload.status?.toLowerCase();
+
+                if (lastRejectedUrl && candidate === lastRejectedUrl) {
+                    if (status === "completed") {
+                        completedUnusableCount += 1;
+                        if (completedUnusableCount >= 3) {
+                            throw new Error("Resolver completed but returned unusable file URL repeatedly");
+                        }
+                    }
+                    continue;
+                }
 
                 if (await this.isResolvedUrlUsable(candidate)) return candidate;
+                if (status === "completed") {
+                    completedUnusableCount += 1;
+                    if (completedUnusableCount >= 3) {
+                        throw new Error("Resolver completed but returned unusable file URL repeatedly");
+                    }
+                }
                 lastRejectedUrl = candidate;
                 continue;
             }

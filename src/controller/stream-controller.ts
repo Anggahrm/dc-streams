@@ -142,11 +142,7 @@ export class StreamController {
                     `- Source: ${shortUrl(url)}`
                 ].join("\n");
             }
-            return [
-                "**Failed to start stream**",
-                "- Source could not be played right now",
-                `- Source: ${shortUrl(url)}`
-            ].join("\n");
+            return "";
         }
 
         if (metadata) {
@@ -507,6 +503,15 @@ export class StreamController {
                 "**Resolver challenge failed**",
                 "- Resolver requested a PoW challenge and did not complete",
                 "- Please retry shortly",
+                `- Source: ${shortUrl(sourceUrl)}`
+            ].join("\n");
+        }
+
+        if (text.includes("completed but returned unusable file url repeatedly")) {
+            return [
+                "**Resolver output unusable**",
+                "- Resolver marked job as completed but file URL cannot be played",
+                "- Please retry with another source",
                 `- Source: ${shortUrl(sourceUrl)}`
             ].join("\n");
         }

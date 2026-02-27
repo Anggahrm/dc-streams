@@ -82,7 +82,7 @@ export async function routeMessage(msg: Message, controller: StreamController, i
         }
         const isCamera = content.startsWith(".play-cam");
         const message = await controller.enqueueAndPlay(msg, url, isCamera ? "camera" : "go-live", isOwnerAuthor);
-        await safeReply(msg, message);
+        if (message) await safeReply(msg, message);
         return;
     }
 
