@@ -128,6 +128,27 @@ export class StreamController {
 
         this.state.queue.unshift(item);
         await this.tryStartNextQueued(msg);
+
+        const activePlayback = (this.state as AppState).activePlayback;
+        const startedCurrentItem = activePlayback
+            && activePlayback.sourceUrl === item.sourceUrl
+            && activePlayback.type === item.type;
+        if (!startedCurrentItem) {
+            const stillQueued = this.state.queue.some((queued) => queued.sourceUrl === item.sourceUrl && queued.type === item.type);
+            if (stillQueued) {
+                return [
+                    "**Queued**",
+                    "- Waiting for playback to start",
+                    `- Source: ${shortUrl(url)}`
+                ].join("\n");
+            }
+            return [
+                "**Failed to start stream**",
+                "- Source could not be played right now",
+                `- Source: ${shortUrl(url)}`
+            ].join("\n");
+        }
+
         if (metadata) {
             return [
                 "**Starting stream**",
@@ -279,7 +300,7 @@ export class StreamController {
             this.markSourceFailure(item.sourceUrl);
             logError("resolve/prepare playback failed", error);
             await safeReply(msg, "**Failed to process source**\nPlease try again in a moment.");
-            await this.afterPlaybackFinalize(msg, item, playbackController, "error");
+            await this.afterPlaybackFinalize(msg, item, playbackController, "error", false);
             return;
         }
 
@@ -345,7 +366,8 @@ export class StreamController {
         msg: Message,
         item: QueueItem,
         playbackController: AbortController,
-        fallbackReason: StopReason
+        fallbackReason: StopReason,
+        notifyErrorReply = true
     ): Promise<void> {
         if (this.state.activePlayback && this.state.activePlayback.controller !== playbackController) return;
 
@@ -376,6 +398,15 @@ export class StreamController {
         const contextMsg = this.state.latestMessageContext ?? msg;
         if (this.state.queue.length > 0) {
             await this.tryStartNextQueued(contextMsg);
+            return;
+        }
+
+        if (reason === "error" && notifyErrorReply) {
+            await safeReply(contextMsg, [
+                "**Stream failed**",
+                "- Playback stopped due to source/decoder error",
+                `- Source: ${shortUrl(item.sourceUrl)}`
+            ].join("\n"));
             return;
         }
 

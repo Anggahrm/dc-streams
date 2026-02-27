@@ -74,7 +74,11 @@ export class YouTubeResolverService {
         payload: ResolverDownloadPayload,
         headers: Record<string, string>
     ): Promise<string> {
-        if (this.hasResolverFileUrl(payload)) return this.extractResolvedFileUrl(payload);
+        if (this.hasResolverFileUrl(payload)) {
+            const candidate = this.extractResolvedFileUrl(payload);
+            if (await this.isResolvedUrlUsable(candidate)) return candidate;
+            return await this.pollResolverFileUrl(sourceUrl, headers, candidate);
+        }
 
         const status = payload.status?.toLowerCase();
         if (status === "failed" || status === "error") {
@@ -87,13 +91,27 @@ export class YouTubeResolverService {
         throw new Error("Resolver response missing file URL");
     }
 
-    private async pollResolverFileUrl(sourceUrl: string, headers: Record<string, string>): Promise<string> {
+    private async pollResolverFileUrl(
+        sourceUrl: string,
+        headers: Record<string, string>,
+        avoidUrl?: string
+    ): Promise<string> {
         const start = Date.now();
+        let lastRejectedUrl = avoidUrl;
+
         while (Date.now() - start < this.options.pollTimeoutMs) {
             await sleep(this.options.pollIntervalMs);
             const result = await this.callResolverDownload(sourceUrl, headers);
             if (result.statusCode >= 400) throw new Error(`Resolver polling failed (${result.statusCode})`);
-            if (this.hasResolverFileUrl(result.payload)) return this.extractResolvedFileUrl(result.payload);
+
+            if (this.hasResolverFileUrl(result.payload)) {
+                const candidate = this.extractResolvedFileUrl(result.payload);
+                if (lastRejectedUrl && candidate === lastRejectedUrl) continue;
+
+                if (await this.isResolvedUrlUsable(candidate)) return candidate;
+                lastRejectedUrl = candidate;
+                continue;
+            }
 
             const status = result.payload.status?.toLowerCase();
             if (status === "failed" || status === "error") {
