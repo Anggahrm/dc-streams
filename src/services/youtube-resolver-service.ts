@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ResolverDownloadPayload } from "../types.js";
 import { sleep } from "../utils/async.js";
-import { logInfo } from "../utils/logger.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 
 type YoutubeResolverOptions = {
     baseUrl: string;
@@ -18,24 +18,25 @@ export class YouTubeResolverService {
     constructor(private readonly options: YoutubeResolverOptions) {}
 
     async resolvePlayableUrl(sourceUrl: string): Promise<string> {
-        if (!this.isYouTubeUrl(sourceUrl)) return sourceUrl;
+        const normalizedSourceUrl = this.normalizeResolverSourceUrl(sourceUrl);
+        if (!this.isYouTubeUrl(normalizedSourceUrl)) return sourceUrl;
 
-        const cached = this.cache.get(sourceUrl);
+        const cached = this.cache.get(normalizedSourceUrl);
         if (cached && cached.expiresAt > Date.now()) {
             const stillValid = await this.isResolvedUrlUsable(cached.url);
             if (stillValid) return cached.url;
-            this.cache.delete(sourceUrl);
+            this.cache.delete(normalizedSourceUrl);
         }
 
-        const resolved = await this.resolveViaApi(sourceUrl);
+        const resolved = await this.resolveViaApi(normalizedSourceUrl);
         if (this.cacheTtlMs > 0) {
-            this.cache.set(sourceUrl, { url: resolved, expiresAt: Date.now() + this.cacheTtlMs });
+            this.cache.set(normalizedSourceUrl, { url: resolved, expiresAt: Date.now() + this.cacheTtlMs });
         }
         return resolved;
     }
 
     invalidate(sourceUrl: string): void {
-        this.cache.delete(sourceUrl);
+        this.cache.delete(this.normalizeResolverSourceUrl(sourceUrl));
     }
 
     private isYouTubeUrl(url: string): boolean {
@@ -44,6 +45,7 @@ export class YouTubeResolverService {
     }
 
     private async resolveViaApi(sourceUrl: string): Promise<string> {
+        logInfo(`Resolver request: type=${this.options.mediaType} source=${sourceUrl}`);
         const headers: Record<string, string> = { Accept: "application/json" };
         const firstTry = await this.callResolverDownload(sourceUrl, headers);
 
@@ -144,7 +146,51 @@ export class YouTubeResolverService {
 
         const response = await fetch(endpoint.toString(), { method: "GET", headers });
         const payload = await response.json().catch(() => ({} as ResolverDownloadPayload));
+        if (response.status >= 400) {
+            const payloadSummary = JSON.stringify({
+                status: payload.status,
+                error: payload.error,
+                id: payload.id
+            });
+            logWarn(`Resolver HTTP ${response.status}: source=${sourceUrl} payload=${payloadSummary}`);
+        }
         return { statusCode: response.status, payload };
+    }
+
+    private normalizeResolverSourceUrl(sourceUrl: string): string {
+        if (!this.isYouTubeUrl(sourceUrl)) return sourceUrl;
+
+        try {
+            const parsed = new URL(sourceUrl);
+            const host = parsed.hostname.toLowerCase();
+
+            if (host === "youtu.be" || host.endsWith(".youtu.be")) {
+                const normalized = new URL(`${parsed.protocol}//youtu.be${parsed.pathname}`);
+                const t = parsed.searchParams.get("t");
+                if (t) normalized.searchParams.set("t", t);
+                return normalized.toString();
+            }
+
+            if (host.includes("youtube.com")) {
+                if (parsed.pathname === "/watch") {
+                    const v = parsed.searchParams.get("v");
+                    if (!v) return sourceUrl;
+                    const normalized = new URL("https://www.youtube.com/watch");
+                    normalized.searchParams.set("v", v);
+                    const t = parsed.searchParams.get("t");
+                    if (t) normalized.searchParams.set("t", t);
+                    return normalized.toString();
+                }
+
+                if (parsed.pathname.startsWith("/shorts/")) {
+                    return `https://www.youtube.com${parsed.pathname}`;
+                }
+            }
+
+            return sourceUrl;
+        } catch {
+            return sourceUrl;
+        }
     }
 
     private async solveYtdlPowSession(sourceUrl: string): Promise<string> {
