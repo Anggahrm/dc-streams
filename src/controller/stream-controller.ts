@@ -299,7 +299,7 @@ export class StreamController {
         } catch (error) {
             this.markSourceFailure(item.sourceUrl);
             logError("resolve/prepare playback failed", error);
-            await safeReply(msg, "**Failed to process source**\nPlease try again in a moment.");
+            await safeReply(msg, this.formatResolvePrepareError(error, item.sourceUrl));
             await this.afterPlaybackFinalize(msg, item, playbackController, "error", false);
             return;
         }
@@ -468,5 +468,49 @@ export class StreamController {
 
         const text = error.message.toLowerCase();
         return text.includes("403") || text.includes("forbidden") || text.includes("access denied");
+    }
+
+    private formatResolvePrepareError(error: unknown, sourceUrl: string): string {
+        const defaultReply = "**Failed to process source**\nPlease try again in a moment.";
+        if (!(error instanceof Error)) return defaultReply;
+
+        const text = error.message.toLowerCase();
+
+        if (text.includes("file size exceeds maximum")) {
+            return [
+                "**Stream rejected by resolver**",
+                "- Reason: file size exceeds resolver limit",
+                "- Try a shorter source or different stream",
+                `- Source: ${shortUrl(sourceUrl)}`
+            ].join("\n");
+        }
+
+        if (text.includes("invalid youtube url")) {
+            return [
+                "**Invalid YouTube URL for resolver**",
+                "- Use standard links like `youtube.com/watch?v=...` or `youtu.be/...`",
+                `- Source: ${shortUrl(sourceUrl)}`
+            ].join("\n");
+        }
+
+        if (text.includes("polling timeout")) {
+            return [
+                "**Resolver timeout**",
+                "- Source processing took too long",
+                "- Please retry in a moment",
+                `- Source: ${shortUrl(sourceUrl)}`
+            ].join("\n");
+        }
+
+        if (text.includes("pow challenge required")) {
+            return [
+                "**Resolver challenge failed**",
+                "- Resolver requested a PoW challenge and did not complete",
+                "- Please retry shortly",
+                `- Source: ${shortUrl(sourceUrl)}`
+            ].join("\n");
+        }
+
+        return defaultReply;
     }
 }
