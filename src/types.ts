@@ -16,6 +16,7 @@ export type StreamOptions = {
 export type QueueItem = {
     sourceUrl: string;
     type: StreamType;
+    requestedByOwner?: boolean;
 };
 
 export type StopReason =
@@ -43,6 +44,7 @@ export type ActivePlayback = {
     sourceUrl: string;
     resolvedUrl: string;
     type: StreamType;
+    requestedByOwner?: boolean;
     baseOffsetSeconds: number;
     startedAtMs: number;
     controller: AbortController;

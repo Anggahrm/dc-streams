@@ -8,7 +8,10 @@ export type RuntimeConfig = BaseConfig;
 
 export function resolveRuntimeConfig(): RuntimeConfig {
     const token = process.env.DISCORD_TOKEN?.trim() || config.token;
-    const acceptedAuthors = parseAcceptedAuthors(process.env.ACCEPTED_AUTHORS) ?? config.acceptedAuthors;
+    const acceptedAuthors =
+        parseAcceptedAuthors(process.env.OWNER_IDS)
+        ?? parseAcceptedAuthors(process.env.ACCEPTED_AUTHORS)
+        ?? config.acceptedAuthors;
 
     return {
         ...config,

@@ -15,16 +15,7 @@ export const profilePresets: Record<ProfileName, {
 export const defaultSeekStepSeconds = 10;
 
 export const helpLines = [
-    "Commands:",
-    ".play-live <url/youtube>",
-    ".play-cam <url>",
-    ".skip",
-    ".stop-stream",
-    ".disconnect",
-    ".queue",
-    ".loop on|off|toggle|show",
-    ".tune show|low|medium|high",
-    ".back [detik]",
-    ".forw [detik]",
-    ".help"
+    "**Command List**",
+    "- Public: `.help`, `.queue`, `.play-live <url/youtube>`, `.play-cam <url>`",
+    "- Owner priority: `.skip`, `.stop-stream`, `.disconnect`, `.loop on|off|toggle|show`, `.tune show|low|medium|high`, `.back [seconds]`, `.forw [seconds]`"
 ] as const;

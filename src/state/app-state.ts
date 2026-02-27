@@ -16,6 +16,7 @@ export class AppState {
     latestMessageContext: Message | undefined;
     playbackSerial = 0;
     pendingRestart: PendingRestart | undefined;
+    startingPlayback = false;
 
     constructor(args: {
         profile: ProfileName;

@@ -30,31 +30,43 @@ export class StreamController {
     }
 
     getTuneStatus(): string {
-        return `Tuning aktif: ${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}. Pilih: .tune low | .tune medium | .tune high`;
+        return [
+            "**Tuning Status**",
+            `- Active: \`${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}\``,
+            "- Use: `.tune low`, `.tune medium`, `.tune high`"
+        ].join("\n");
     }
 
     toggleLoop(arg: string | undefined): string {
-        if (!arg || arg === "show") return `Loop: ${this.state.loopEnabled ? "ON" : "OFF"}`;
+        if (!arg || arg === "show") return `**Loop:** ${this.state.loopEnabled ? "ON" : "OFF"}`;
         if (arg === "toggle") this.state.loopEnabled = !this.state.loopEnabled;
         else if (arg === "on") this.state.loopEnabled = true;
         else if (arg === "off") this.state.loopEnabled = false;
-        else return "Gunakan: .loop on | off | toggle | show";
-        return `Loop: ${this.state.loopEnabled ? "ON" : "OFF"}`;
+        else return "**Invalid loop argument**\nUse: `.loop on`, `.loop off`, `.loop toggle`, `.loop show`.";
+        return `**Loop:** ${this.state.loopEnabled ? "ON" : "OFF"}`;
     }
 
     async applyTune(msg: Message, profile: ProfileName): Promise<string> {
         this.state.activeProfile = profile;
         this.state.activeStreamOpts = buildStreamOpts(this.runtimeConfig, profile);
-        if (!this.state.activePlayback) return `Tuning diubah ke ${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}`;
+        if (!this.state.activePlayback) return `**Tuning updated**\nActive: \`${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}\``;
 
         const offsetSeconds = getCurrentOffsetSeconds(this.state.activePlayback);
-        const current = { sourceUrl: this.state.activePlayback.sourceUrl, type: this.state.activePlayback.type };
+        const current = {
+            sourceUrl: this.state.activePlayback.sourceUrl,
+            type: this.state.activePlayback.type,
+            requestedByOwner: this.state.activePlayback.requestedByOwner
+        };
         await this.restartCurrentPlayback(msg, current, offsetSeconds, "tune");
-        return `Tuning diubah: ${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}. Diterapkan ke stream aktif.`;
+        return [
+            "**Tuning updated**",
+            `- Active: \`${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}\``,
+            "- Applied to active stream"
+        ].join("\n");
     }
 
     async seekPlayback(msg: Message, deltaSeconds: number): Promise<string> {
-        if (!this.state.activePlayback) return "Tidak ada stream aktif.";
+        if (!this.state.activePlayback) return "**No active stream.**";
 
         const currentOffsetSeconds = getCurrentOffsetSeconds(this.state.activePlayback);
         let targetOffsetSeconds = Math.max(0, currentOffsetSeconds + deltaSeconds);
@@ -64,40 +76,73 @@ export class StreamController {
             if (targetOffsetSeconds > maxSeek) targetOffsetSeconds = maxSeek;
         }
 
-        const current = { sourceUrl: this.state.activePlayback.sourceUrl, type: this.state.activePlayback.type };
+        const current = {
+            sourceUrl: this.state.activePlayback.sourceUrl,
+            type: this.state.activePlayback.type,
+            requestedByOwner: this.state.activePlayback.requestedByOwner
+        };
         await this.restartCurrentPlayback(msg, current, targetOffsetSeconds, "seek");
-        return `Seek ke ${Math.floor(targetOffsetSeconds)} detik.`;
+        return `**Seek:** ${Math.floor(targetOffsetSeconds)} seconds.`;
     }
 
     async skip(msg: Message): Promise<string> {
         if (!this.state.activePlayback) {
-            if (this.state.queue.length === 0) return "Queue kosong.";
+            if (this.state.queue.length === 0) return "**Queue is empty.**";
             await this.tryStartNextQueued(msg);
-            return "Tidak ada stream aktif. Menjalankan queue berikutnya...";
+            return "**No active stream**\nTrying to start the next queued item…";
         }
 
         const hasNext = this.state.queue.length > 0 || this.state.loopEnabled;
         this.state.activePlayback.stopReason = "skip";
         this.state.activePlayback.controller.abort();
-        return hasNext ? "Skip: lanjut ke item berikutnya." : "Skip: stream dihentikan, queue kosong.";
+        return hasNext
+            ? "**Skip successful**\nMoving to the next queued item."
+            : "**Skip successful**\nStream stopped, queue is empty.";
     }
 
-    async enqueueAndPlay(msg: Message, url: string, type: StreamType): Promise<string> {
+    async enqueueAndPlay(msg: Message, url: string, type: StreamType, requestedByOwner: boolean): Promise<string> {
         const metadata = await this.metadataService.getOrProbe(url);
-        const item: QueueItem = { sourceUrl: url, type };
+        const item: QueueItem = { sourceUrl: url, type, requestedByOwner };
 
         if (this.state.activePlayback) {
-            this.state.queue.push(item);
-            if (metadata) {
-                return `${formatMetadataReply(metadata)}\nMasuk queue (#${this.state.queue.length}): ${shortUrl(url)}`;
+            if (requestedByOwner) {
+                const firstNonOwnerIndex = this.state.queue.findIndex((queuedItem) => !queuedItem.requestedByOwner);
+                if (firstNonOwnerIndex === -1) this.state.queue.push(item);
+                else this.state.queue.splice(firstNonOwnerIndex, 0, item);
+            } else {
+                this.state.queue.push(item);
             }
-            return `Masuk queue (#${this.state.queue.length}): ${shortUrl(url)}`;
+            if (metadata) {
+                return [
+                    formatMetadataReply(metadata),
+                    "",
+                    requestedByOwner
+                        ? `**Added to owner-priority queue** (#${this.state.queue.length})\n${shortUrl(url)}`
+                        : `**Added to queue** (#${this.state.queue.length})\n${shortUrl(url)}`
+                ].join("\n");
+            }
+            return requestedByOwner
+                ? `**Added to owner-priority queue** (#${this.state.queue.length})\n${shortUrl(url)}`
+                : `**Added to queue** (#${this.state.queue.length})\n${shortUrl(url)}`;
         }
 
         this.state.queue.unshift(item);
         await this.tryStartNextQueued(msg);
-        if (metadata) return formatMetadataReply(metadata);
-        return `Memulai stream: ${shortUrl(url)}`;
+        if (metadata) {
+            return [
+                "**Starting stream**",
+                `- Mode: ${type}`,
+                `- Requested by: ${requestedByOwner ? "owner" : "public"}`,
+                "",
+                formatMetadataReply(metadata)
+            ].join("\n");
+        }
+        return [
+            "**Starting stream**",
+            `- Mode: ${type}`,
+            `- Requested by: ${requestedByOwner ? "owner" : "public"}`,
+            `- Source: ${shortUrl(url)}`
+        ].join("\n");
     }
 
     async disconnect(): Promise<void> {
@@ -114,22 +159,28 @@ export class StreamController {
     stopStreamOnly(): string {
         this.state.queue = [];
         this.state.pendingRestart = undefined;
-        if (!this.state.activePlayback) return "Tidak ada stream aktif.";
+        if (!this.state.activePlayback) return "**No active stream.**";
         this.state.activePlayback.stopReason = "manual-stop";
         this.state.activePlayback.controller.abort();
-        return "Stream dihentikan. Tetap di voice.";
+        return "**Stream stopped**\nStill connected to voice channel.";
     }
 
     async tryStartNextQueued(msg: Message, forcedOffsetSeconds = 0): Promise<void> {
-        if (this.state.activePlayback) return;
-        const next = this.dequeueNextUsableItem();
+        if (this.state.activePlayback || this.state.startingPlayback) return;
+        const next = this.dequeueNextUsableItem(forcedOffsetSeconds > 0);
         if (!next) return;
-        await this.startPlayback(msg, next, forcedOffsetSeconds);
+        this.state.startingPlayback = true;
+        try {
+            await this.startPlayback(msg, next, forcedOffsetSeconds);
+        } finally {
+            this.state.startingPlayback = false;
+        }
     }
 
-    private dequeueNextUsableItem(): QueueItem | undefined {
+    private dequeueNextUsableItem(preferFront = false): QueueItem | undefined {
         while (this.state.queue.length > 0) {
-            const item = this.state.queue.shift();
+            const ownerIndex = preferFront ? -1 : this.state.queue.findIndex((item) => item.requestedByOwner);
+            const item = ownerIndex >= 0 ? this.state.queue.splice(ownerIndex, 1)[0] : this.state.queue.shift();
             if (!item) return undefined;
             const fail = this.failedSources.get(item.sourceUrl);
             if (!fail) return item;
@@ -189,7 +240,8 @@ export class StreamController {
     private async startPlayback(msg: Message, item: QueueItem, startOffsetSeconds = 0): Promise<void> {
         const joined = await this.ensureVoiceJoined(msg);
         if (!joined) {
-            await safeReply(msg, "Masuk voice channel terlebih dahulu.");
+            this.state.queue.unshift(item);
+            await safeReply(msg, "**Not connected to voice**\nJoin a voice channel first, then use `.skip` to retry the queue.");
             return;
         }
 
@@ -226,7 +278,7 @@ export class StreamController {
         } catch (error) {
             this.markSourceFailure(item.sourceUrl);
             logError("resolve/prepare playback failed", error);
-            await safeReply(msg, "Gagal memproses source. Coba lagi beberapa saat.");
+            await safeReply(msg, "**Failed to process source**\nPlease try again in a moment.");
             await this.afterPlaybackFinalize(msg, item, playbackController, "error");
             return;
         }
@@ -236,6 +288,7 @@ export class StreamController {
             sourceUrl: item.sourceUrl,
             resolvedUrl: resolvedStreamUrl,
             type: item.type,
+            requestedByOwner: item.requestedByOwner,
             baseOffsetSeconds: seekSeconds,
             startedAtMs: Date.now(),
             controller: playbackController,
@@ -317,7 +370,7 @@ export class StreamController {
         }
 
         if (this.state.loopEnabled && endedPlayback && reason !== "error") {
-            this.state.queue.unshift({ sourceUrl: item.sourceUrl, type: item.type });
+            this.state.queue.unshift({ sourceUrl: item.sourceUrl, type: item.type, requestedByOwner: item.requestedByOwner });
         }
 
         const contextMsg = this.state.latestMessageContext ?? msg;
@@ -327,7 +380,7 @@ export class StreamController {
         }
 
         if (endedPlayback && reason !== "error") {
-            await safeReply(contextMsg, "Stream selesai. Tetap di voice channel.");
+            await safeReply(contextMsg, "**Stream finished**\nStill connected to voice channel.");
         }
     }
 

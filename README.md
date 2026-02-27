@@ -24,25 +24,17 @@ Detailed notes: `docs/refactor-architecture.md`.
 
 ## Commands
 
-- `.play-live <url>`: start Go Live stream from URL.
-- `.play-cam <url>`: start camera stream from URL.
-- If stream is active, `.play-live`/`.play-cam` adds item to queue.
-- `.skip`: stop current stream and continue next queue item.
-- `.stop-stream`: stop stream and clear queue, stay in voice channel.
-- `.disconnect`: leave voice channel and clear queue.
-- `.queue`: show active stream and queued items.
-- `.loop on|off|toggle|show`: loop last finished stream.
-- `.tune show`: show active tuning profile.
-- `.tune low|medium|high`: switch runtime tuning profile. If stream is active, profile auto-applies by restarting from current offset (not from start).
-- `.back [seconds]`: restart active stream from current position minus seconds (default 10).
-- `.forw [seconds]`: restart active stream from current position plus seconds (default 10).
-- `.help`: show command help.
+- Public commands: `.help`, `.queue`, `.play-live <url>`, `.play-cam <url>`.
+- Owner-priority commands: `.skip`, `.stop-stream`, `.disconnect`, `.loop on|off|toggle|show`, `.tune show|low|medium|high`, `.back [seconds]`, `.forw [seconds]`.
+- If stream is active, `.play-live` / `.play-cam` adds item to queue.
+- Owner requests are prioritized in queue order.
 
 ## Runtime config (env vars)
 
 Use env vars to avoid storing secrets in `src/config.json`:
 
 - `DISCORD_TOKEN`: Discord self token.
+- `OWNER_IDS`: comma-separated owner IDs, example `123,456`.
 - `ACCEPTED_AUTHORS`: comma-separated user IDs, example `123,456`.
 - `YTDL_API_BASE`: YouTube resolver API base (default `https://youtubedl.siputzx.my.id`).
 - `YTDL_API_KEY`: optional API key for resolver.

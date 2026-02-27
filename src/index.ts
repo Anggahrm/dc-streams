@@ -41,16 +41,16 @@ streamer.client.on("ready", () => {
 
 streamer.client.on("messageCreate", async (msg) => {
     if (msg.author.bot) return;
-    if (!runtimeConfig.acceptedAuthors.includes(msg.author.id)) return;
     if (!msg.content) return;
 
     state.latestMessageContext = msg;
+    const isOwnerAuthor = runtimeConfig.acceptedAuthors.includes(msg.author.id);
 
     try {
-        await routeMessage(msg, controller);
+        await routeMessage(msg, controller, isOwnerAuthor);
     } catch (error) {
         logError("messageCreate handler error", error);
-        await safeReply(msg, "Command gagal diproses. Coba lagi.");
+        await safeReply(msg, "**Command failed to process**\nPlease try again.");
     }
 });
 
