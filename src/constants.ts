@@ -16,6 +16,27 @@ export const defaultSeekStepSeconds = 10;
 
 export const helpLines = [
     "**Command List**",
-    "- Public: `.help`, `.queue`, `.play-live <url/youtube>`, `.play-cam <url>`",
-    "- Owner priority: `.skip`, `.stop-stream`, `.disconnect`, `.loop on|off|toggle|show`, `.tune show|low|medium|high`, `.back [seconds]`, `.forw [seconds]`"
+    "",
+    "**Stream**",
+    "- `.play-live <url/youtube>` - Stream via Go Live",
+    "- `.play-cam <url>` - Stream via Camera",
+    "- `.queue` - Show queue status",
+    "",
+    "**Anime / Donghua**",
+    "- `.anime <keyword>` - Search anime",
+    "- `.anime-detail <id>` - Show anime detail",
+    "- `.anime-play <episodeId>` - Stream anime episode",
+    "- `.donghua <keyword>` - Search donghua",
+    "- `.donghua-detail <slug>` - Show donghua detail",
+    "- `.donghua-play <episodeSlug>` - Stream donghua episode",
+    "",
+    "**Owner Only**",
+    "- `.skip` - Skip current stream",
+    "- `.stop-stream` - Stop stream, stay in VC",
+    "- `.disconnect` - Disconnect and clear queue",
+    "- `.loop on|off|toggle|show` - Toggle loop",
+    "- `.tune show|low|medium|high` - Change quality profile",
+    "- `.back [seconds]` / `.forw [seconds]` - Seek",
+    "",
+    "Use `.help` to see this list."
 ] as const;

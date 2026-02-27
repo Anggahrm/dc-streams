@@ -3,8 +3,10 @@ import { Streamer, Utils, playStream, prepareStream } from "@dank074/discord-vid
 import type { RuntimeConfig } from "../config/runtime.js";
 import { buildStreamOpts, formatProfile } from "../config/runtime.js";
 import { formatQueueStatus } from "../formatters/queue.js";
+import { formatResolvePrepareError } from "../formatters/stream-errors.js";
 import type { AppState } from "../state/app-state.js";
 import type { PendingRestartCause, ProfileName, QueueItem, StopReason, StreamType } from "../types.js";
+import { FailedSourceTracker, classifyPlaybackError } from "./error-recovery.js";
 import { sleep, withTimeout } from "../utils/async.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatMetadataReply, getCurrentOffsetSeconds, shortUrl } from "../utils/media.js";
@@ -12,10 +14,8 @@ import { safeReply } from "../utils/reply.js";
 import type { MetadataService } from "../services/metadata-service.js";
 import type { YouTubeResolverService } from "../services/youtube-resolver-service.js";
 
-type FailedSource = { count: number; lastFailedAt: number };
-
 export class StreamController {
-    private readonly failedSources = new Map<string, FailedSource>();
+    private readonly failedSourceTracker = new FailedSourceTracker();
 
     constructor(
         private readonly streamer: Streamer,
@@ -51,12 +51,9 @@ export class StreamController {
         this.state.activeStreamOpts = buildStreamOpts(this.runtimeConfig, profile);
         if (!this.state.activePlayback) return `**Tuning updated**\nActive: \`${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}\``;
 
+        const current = this.getCurrentPlaybackItem();
+        if (!current) return `**Tuning updated**\nActive: \`${formatProfile(this.state.activeProfile, this.state.activeStreamOpts)}\``;
         const offsetSeconds = getCurrentOffsetSeconds(this.state.activePlayback);
-        const current = {
-            sourceUrl: this.state.activePlayback.sourceUrl,
-            type: this.state.activePlayback.type,
-            requestedByOwner: this.state.activePlayback.requestedByOwner
-        };
         await this.restartCurrentPlayback(msg, current, offsetSeconds, "tune");
         return [
             "**Tuning updated**",
@@ -76,11 +73,8 @@ export class StreamController {
             if (targetOffsetSeconds > maxSeek) targetOffsetSeconds = maxSeek;
         }
 
-        const current = {
-            sourceUrl: this.state.activePlayback.sourceUrl,
-            type: this.state.activePlayback.type,
-            requestedByOwner: this.state.activePlayback.requestedByOwner
-        };
+        const current = this.getCurrentPlaybackItem();
+        if (!current) return "**No active stream.**";
         await this.restartCurrentPlayback(msg, current, targetOffsetSeconds, "seek");
         return `**Seek:** ${Math.floor(targetOffsetSeconds)} seconds.`;
     }
@@ -199,13 +193,19 @@ export class StreamController {
             const ownerIndex = preferFront ? -1 : this.state.queue.findIndex((item) => item.requestedByOwner);
             const item = ownerIndex >= 0 ? this.state.queue.splice(ownerIndex, 1)[0] : this.state.queue.shift();
             if (!item) return undefined;
-            const fail = this.failedSources.get(item.sourceUrl);
-            if (!fail) return item;
-            const recent = Date.now() - fail.lastFailedAt < 30_000;
-            if (fail.count < 3 || !recent) return item;
+            if (!this.failedSourceTracker.isUnstable(item.sourceUrl)) return item;
             logWarn(`Skipping unstable source after repeated failures: ${item.sourceUrl}`);
         }
         return undefined;
+    }
+
+    private getCurrentPlaybackItem(): QueueItem | undefined {
+        if (!this.state.activePlayback) return undefined;
+        return {
+            sourceUrl: this.state.activePlayback.sourceUrl,
+            type: this.state.activePlayback.type,
+            requestedByOwner: this.state.activePlayback.requestedByOwner
+        };
     }
 
     private async restartCurrentPlayback(msg: Message, item: QueueItem, offsetSeconds: number, reason: StopReason): Promise<void> {
@@ -293,9 +293,9 @@ export class StreamController {
             });
             output = prepared.output;
         } catch (error) {
-            this.markSourceFailure(item.sourceUrl);
+            this.failedSourceTracker.mark(item.sourceUrl);
             logError("resolve/prepare playback failed", error);
-            await safeReply(msg, this.formatResolvePrepareError(error, item.sourceUrl));
+            await safeReply(msg, formatResolvePrepareError(error, item.sourceUrl));
             await this.afterPlaybackFinalize(msg, item, playbackController, "error", false);
             return;
         }
@@ -315,55 +315,32 @@ export class StreamController {
         try {
             await playStream(output, this.streamer, { type: item.type }, playbackController.signal);
             logInfo(`Playback ended naturally serial=${serial}`);
-            this.clearSourceFailure(item.sourceUrl);
+            this.failedSourceTracker.clear(item.sourceUrl);
         } catch (error) {
             if (!playbackController.signal.aborted) {
-                if (error instanceof Error && error.message.includes("Bot is not connected to a voice channel")) {
-                    this.state.pendingRestart = {
-                        item,
-                        offsetSeconds: seekSeconds,
-                        msg,
-                        retries: 1,
-                        cause: "disconnect-recover"
-                    };
-                    if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
-                        this.state.activePlayback.stopReason = "switch";
-                    }
+                const recovery = classifyPlaybackError(
+                    error,
+                    item,
+                    resolvedStreamUrl,
+                    seekSeconds,
+                    msg,
+                    this.failedSourceTracker
+                );
+
+                if (recovery.kind === "disconnect-recover") {
+                    this.state.pendingRestart = recovery.restart;
+                    this.setSwitchStopReason(playbackController);
                     return;
                 }
-                if (this.shouldRefreshResolvedUrl(error, item.sourceUrl)) {
-                    this.markSourceFailure(item.sourceUrl);
+
+                if (recovery.kind === "refresh-url") {
                     this.youtubeResolverService.invalidate(item.sourceUrl);
-                    this.state.pendingRestart = {
-                        item,
-                        offsetSeconds: seekSeconds,
-                        msg,
-                        retries: 1,
-                        cause: "refresh-url"
-                    };
-                    if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
-                        this.state.activePlayback.stopReason = "switch";
-                    }
-                    logWarn(`Resolver URL stale, retrying with fresh URL: ${item.sourceUrl}`);
+                    this.state.pendingRestart = recovery.restart;
+                    this.setSwitchStopReason(playbackController);
                     return;
                 }
-                if (this.shouldRetryGoogleVideoForbidden(error, resolvedStreamUrl)) {
-                    this.markSourceFailure(item.sourceUrl);
-                    this.youtubeResolverService.invalidate(item.sourceUrl);
-                    this.state.pendingRestart = {
-                        item,
-                        offsetSeconds: seekSeconds,
-                        msg,
-                        retries: 1,
-                        cause: "refresh-url"
-                    };
-                    if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
-                        this.state.activePlayback.stopReason = "switch";
-                    }
-                    logWarn(`Googlevideo 403 detected, forcing fresh resolver URL: ${item.sourceUrl}`);
-                    return;
-                }
-                this.markSourceFailure(item.sourceUrl);
+
+                this.failedSourceTracker.mark(item.sourceUrl);
                 logError("playStream error", error);
                 if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
                     this.state.activePlayback.stopReason = "error";
@@ -428,94 +405,9 @@ export class StreamController {
         }
     }
 
-    private markSourceFailure(sourceUrl: string): void {
-        const current = this.failedSources.get(sourceUrl);
-        this.failedSources.set(sourceUrl, {
-            count: (current?.count ?? 0) + 1,
-            lastFailedAt: Date.now()
-        });
-    }
-
-    private clearSourceFailure(sourceUrl: string): void {
-        this.failedSources.delete(sourceUrl);
-    }
-
-    private shouldRefreshResolvedUrl(error: unknown, sourceUrl: string): boolean {
-        const normalizedSource = sourceUrl.toLowerCase();
-        const failures = this.failedSources.get(sourceUrl)?.count ?? 0;
-        if (failures > 0) return false;
-
-        if (normalizedSource.includes("youtube.com/") || normalizedSource.includes("youtu.be/") || normalizedSource.startsWith("yt:")) {
-            if (error instanceof Error) {
-                const text = error.message.toLowerCase();
-                return text.includes("404")
-                    || text.includes("not found")
-                    || text.includes("invalid data found when processing input")
-                    || text.includes("error opening input");
-            }
+    private setSwitchStopReason(playbackController: AbortController): void {
+        if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
+            this.state.activePlayback.stopReason = "switch";
         }
-        return false;
-    }
-
-    private shouldRetryGoogleVideoForbidden(error: unknown, resolvedUrl: string): boolean {
-        const normalizedResolved = resolvedUrl.toLowerCase();
-        if (!normalizedResolved.includes("googlevideo.com/")) return false;
-        if (!(error instanceof Error)) return false;
-
-        const text = error.message.toLowerCase();
-        return text.includes("403") || text.includes("forbidden") || text.includes("access denied");
-    }
-
-    private formatResolvePrepareError(error: unknown, sourceUrl: string): string {
-        const defaultReply = "**Failed to process source**\nPlease try again in a moment.";
-        if (!(error instanceof Error)) return defaultReply;
-
-        const text = error.message.toLowerCase();
-
-        if (text.includes("file size exceeds maximum")) {
-            return [
-                "**Stream rejected by resolver**",
-                "- Reason: file size exceeds resolver limit",
-                "- Try a shorter source or different stream",
-                `- Source: ${shortUrl(sourceUrl)}`
-            ].join("\n");
-        }
-
-        if (text.includes("invalid youtube url")) {
-            return [
-                "**Invalid YouTube URL for resolver**",
-                "- Use standard links like `youtube.com/watch?v=...` or `youtu.be/...`",
-                `- Source: ${shortUrl(sourceUrl)}`
-            ].join("\n");
-        }
-
-        if (text.includes("polling timeout")) {
-            return [
-                "**Resolver timeout**",
-                "- Source processing took too long",
-                "- Please retry in a moment",
-                `- Source: ${shortUrl(sourceUrl)}`
-            ].join("\n");
-        }
-
-        if (text.includes("pow challenge required")) {
-            return [
-                "**Resolver challenge failed**",
-                "- Resolver requested a PoW challenge and did not complete",
-                "- Please retry shortly",
-                `- Source: ${shortUrl(sourceUrl)}`
-            ].join("\n");
-        }
-
-        if (text.includes("completed but returned unusable file url repeatedly")) {
-            return [
-                "**Resolver output unusable**",
-                "- Resolver marked job as completed but file URL cannot be played",
-                "- Please retry with another source",
-                `- Source: ${shortUrl(sourceUrl)}`
-            ].join("\n");
-        }
-
-        return defaultReply;
     }
 }

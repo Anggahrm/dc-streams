@@ -1,5 +1,7 @@
 import type { Message } from "discord.js-selfbot-v13";
 
+// --- Stream & Playback ---
+
 export type ProfileName = "low" | "medium" | "high";
 export type StreamType = "go-live" | "camera";
 
@@ -51,6 +53,8 @@ export type ActivePlayback = {
     stopReason: StopReason;
 };
 
+// --- Media Probe ---
+
 export type ProbeResult = {
     format?: {
         duration?: string;
@@ -75,6 +79,8 @@ export type VideoMetadata = {
     audioCodec: string;
 };
 
+// --- YouTube Resolver ---
+
 export type ResolverDownloadPayload = {
     fileUrl?: string;
     file_url?: string;
@@ -83,4 +89,88 @@ export type ResolverDownloadPayload = {
     error?: string;
     id?: string;
     data?: { fileUrl?: string; url?: string };
+};
+
+// --- Anime / Donghua (Sanka Vollerei API) ---
+
+export type AnimeSearchResult = {
+    title: string;
+    poster: string;
+    status: string;
+    score: string;
+    animeId: string;
+    href: string;
+    genreList: Array<{ title: string; genreId: string; href: string }>;
+};
+
+export type AnimeDetail = {
+    title: string;
+    poster: string;
+    status: string;
+    score: string;
+    synopsis: string;
+    genres: string[];
+    episodeList: Array<{
+        title: string;
+        episodeId: string;
+        href: string;
+    }>;
+};
+
+export type AnimeEpisode = {
+    title: string;
+    animeId: string;
+    defaultStreamingUrl: string;
+    hasPrevEpisode: boolean;
+    hasNextEpisode: boolean;
+    server: {
+        qualities: Array<{
+            title: string;
+            serverList: Array<{
+                title: string;
+                serverId: string;
+                href: string;
+            }>;
+        }>;
+    };
+};
+
+export type AnimeServerResult = {
+    url: string;
+};
+
+export type DonghuaSearchResult = {
+    title: string;
+    slug: string;
+    poster: string;
+    status: string;
+    type: string;
+    sub: string;
+    href: string;
+};
+
+export type DonghuaDetail = {
+    title: string;
+    alter_title: string;
+    poster: string;
+    rating: string;
+    status: string;
+    type: string;
+    synopsis: string;
+    genres: Array<{ name: string; slug: string }>;
+    episodes_list: Array<{
+        episode: string;
+        slug: string;
+        href: string;
+    }>;
+};
+
+export type DonghuaEpisode = {
+    title: string;
+    defaultStreamingUrl?: string;
+    streamUrl?: string;
+    downloadLinks?: Array<{
+        quality: string;
+        urls: Array<{ title: string; url: string }>;
+    }>;
 };
