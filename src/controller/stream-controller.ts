@@ -5,7 +5,7 @@ import { buildStreamOpts, formatProfile } from "../config/runtime.js";
 import { formatQueueStatus } from "../formatters/queue.js";
 import type { AppState } from "../state/app-state.js";
 import type { PendingRestartCause, ProfileName, QueueItem, StopReason, StreamType } from "../types.js";
-import { withTimeout } from "../utils/async.js";
+import { sleep, withTimeout } from "../utils/async.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatMetadataReply, getCurrentOffsetSeconds, shortUrl } from "../utils/media.js";
 import { safeReply } from "../utils/reply.js";
@@ -351,6 +351,22 @@ export class StreamController {
                     logWarn(`Resolver URL stale, retrying with fresh URL: ${item.sourceUrl}`);
                     return;
                 }
+                if (this.shouldRetryGoogleVideoForbidden(error, resolvedStreamUrl)) {
+                    this.markSourceFailure(item.sourceUrl);
+                    this.youtubeResolverService.invalidate(item.sourceUrl);
+                    this.state.pendingRestart = {
+                        item,
+                        offsetSeconds: seekSeconds,
+                        msg,
+                        retries: 1,
+                        cause: "refresh-url"
+                    };
+                    if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
+                        this.state.activePlayback.stopReason = "switch";
+                    }
+                    logWarn(`Googlevideo 403 detected, forcing fresh resolver URL: ${item.sourceUrl}`);
+                    return;
+                }
                 this.markSourceFailure(item.sourceUrl);
                 logError("playStream error", error);
                 if (this.state.activePlayback && this.state.activePlayback.controller === playbackController) {
@@ -383,6 +399,7 @@ export class StreamController {
             this.state.pendingRestart = undefined;
             if (restart.cause === "disconnect-recover" && restart.retries > 1) return;
             if (restart.cause === "refresh-url" && restart.retries > 1) return;
+            if (restart.cause === "refresh-url") await sleep(1200);
             await this.startPlayback(restart.msg, restart.item, restart.offsetSeconds);
             return;
         }
@@ -442,5 +459,14 @@ export class StreamController {
             }
         }
         return false;
+    }
+
+    private shouldRetryGoogleVideoForbidden(error: unknown, resolvedUrl: string): boolean {
+        const normalizedResolved = resolvedUrl.toLowerCase();
+        if (!normalizedResolved.includes("googlevideo.com/")) return false;
+        if (!(error instanceof Error)) return false;
+
+        const text = error.message.toLowerCase();
+        return text.includes("403") || text.includes("forbidden") || text.includes("access denied");
     }
 }

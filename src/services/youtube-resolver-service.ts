@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ResolverDownloadPayload } from "../types.js";
 import { sleep } from "../utils/async.js";
+import { logInfo } from "../utils/logger.js";
 
 type YoutubeResolverOptions = {
     baseUrl: string;
@@ -98,11 +99,17 @@ export class YouTubeResolverService {
     ): Promise<string> {
         const start = Date.now();
         let lastRejectedUrl = avoidUrl;
+        let pollCount = 0;
 
         while (Date.now() - start < this.options.pollTimeoutMs) {
             await sleep(this.options.pollIntervalMs);
             const result = await this.callResolverDownload(sourceUrl, headers);
             if (result.statusCode >= 400) throw new Error(`Resolver polling failed (${result.statusCode})`);
+            pollCount += 1;
+
+            logInfo(
+                `Resolver poll #${pollCount}: status=${result.payload.status || "unknown"} id=${result.payload.id || "-"} hasFileUrl=${this.hasResolverFileUrl(result.payload)}`
+            );
 
             if (this.hasResolverFileUrl(result.payload)) {
                 const candidate = this.extractResolvedFileUrl(result.payload);
@@ -118,6 +125,7 @@ export class YouTubeResolverService {
                 throw new Error(`Resolver polling failed: ${result.payload.error || "unknown"}`);
             }
         }
+        logInfo(`Resolver polling timeout after ${pollCount} attempts for ${sourceUrl}`);
         throw new Error("Resolver polling timeout");
     }
 
